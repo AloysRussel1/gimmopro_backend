@@ -64,11 +64,11 @@ class Occupant(models.Model):
             self.statut = 'En retard'
         else:
             self.statut = 'Actif'
-        self.save()
+        # NE PAS appeler self.save() ici
 
     def save(self, *args, **kwargs):
-        self.calculer_statut()
-        super(Occupant, self).save(*args, **kwargs)
+        self.calculer_statut()  # met à jour le statut
+        super(Occupant, self).save(*args, **kwargs)  # sauvegarde une seule fois
 
 
 

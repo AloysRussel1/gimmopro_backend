@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────
+# requirements.txt — ajoute ces packages
+# ─────────────────────────────────────────
+djangorestframework-simplejwt==5.3.1
+djangorestframework==3.15.1
+django-cors-headers==4.3.1
+
+
+# ─────────────────────────────────────────
+# settings.py — ajoute ces blocs
+# ─────────────────────────────────────────
+
+INSTALLED_APPS = [
+    # ... tes apps existantes ...
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',  # pour le logout
+    'corsheaders',
+]
+
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # EN PREMIER
+    # ... reste du middleware ...
+]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+}
+
+# CORS — pour que ton frontend React puisse appeler l'API
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8100",  # Ionic dev server
+]
+
+# ─────────────────────────────────────────
+# Après avoir modifié settings.py, lance :
+# ─────────────────────────────────────────
+# pip install djangorestframework-simplejwt django-cors-headers
+# python manage.py migrate
