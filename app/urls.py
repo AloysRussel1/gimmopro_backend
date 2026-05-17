@@ -12,6 +12,9 @@ urlpatterns = [
     # Dashboard
     path('dashboard/stats/', views.DashboardStatsView.as_view(), name='dashboard-stats'),
 
+    # Rapport mensuel PDF
+    path('rapports/mensuel/', views.RapportMensuelPDFView.as_view(), name='rapport-mensuel'),
+
     # Logements
     path('logements/',                   views.LogementListCreateView.as_view(), name='logement-list-create'),
     path('logements/<int:logement_id>/', views.LogementDetailView.as_view(),     name='logement-detail'),
@@ -23,12 +26,13 @@ urlpatterns = [
     path('compartiments/<int:compartiment_id>/historique/',    views.HistoriqueCompartimentView.as_view(),  name='compartiment-historique'),
 
     # Occupants
-    path('occupants/',                           views.OccupantListCreateView.as_view(), name='occupant-list-create'),
-    path('occupants/<int:occupant_id>/',         views.OccupantDetailView.as_view(),     name='occupant-detail'),
-    path('occupants/<int:occupant_id>/liberer/', views.OccupantLibererView.as_view(),    name='occupant-liberer'),
-    path('occupants/<int:occupant_id>/contrat/', views.OccupantContratPDFView.as_view(), name='occupant-contrat'),
+    path('occupants/',                           views.OccupantListCreateView.as_view(),  name='occupant-list-create'),
+    path('occupants/<int:occupant_id>/',         views.OccupantDetailView.as_view(),      name='occupant-detail'),
+    path('occupants/<int:occupant_id>/liberer/', views.OccupantLibererView.as_view(),     name='occupant-liberer'),
+    path('occupants/<int:occupant_id>/contrat/', views.OccupantContratPDFView.as_view(),  name='occupant-contrat'),
 
     # Paiements
-    path('paiements/',                   views.PaiementListCreateView.as_view(), name='paiement-list-create'),
-    path('paiements/<int:paiement_id>/', views.PaiementDetailView.as_view(),     name='paiement-detail'),
+    path('paiements/',                        views.PaiementListCreateView.as_view(), name='paiement-list-create'),
+    path('paiements/<int:paiement_id>/',      views.PaiementDetailView.as_view(),     name='paiement-detail'),
+    path('paiements/<int:paiement_id>/recu/', views.RecuPaiementPDFView.as_view(),    name='paiement-recu'),
 ]

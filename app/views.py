@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.http import HttpResponse
 from datetime import datetime, date
 import io
+import calendar
 
 from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView
@@ -16,6 +17,20 @@ from .serializers import (
     LogementSerializer, CompartimentSerializer,
     OccupantSerializer, PaiementSerializer, HistoriqueOccupationSerializer,
 )
+
+
+# ── HELPERS PDF ───────────────────────────────────
+
+def get_reportlab():
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
+        return A4, getSampleStyleSheet, ParagraphStyle, cm, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, colors
+    except ImportError:
+        return None
 
 
 # ── AUTH ──────────────────────────────────────────
@@ -64,26 +79,18 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from decimal import Decimal
-        paiements      = Paiement.objects.all()
+        paiements        = Paiement.objects.all()
         occupants_actifs = Occupant.objects.filter(actif=True)
-
-        # Retards
-        en_retard = occupants_actifs.filter(statut='En retard')
-
-        # Revenus du mois courant
-        mois = date.today().month
+        en_retard        = occupants_actifs.filter(statut='En retard')
+        mois  = date.today().month
         annee = date.today().year
         revenus_mois = sum(
             p.montant_verse for p in paiements.filter(
                 date_paiement__month=mois, date_paiement__year=annee
             )
         )
-
         return Response({
-            'logements': {
-                'total': Logement.objects.count(),
-            },
+            'logements':    { 'total': Logement.objects.count() },
             'compartiments': {
                 'total':   Compartiment.objects.count(),
                 'libres':  Compartiment.objects.filter(statut='LIBRE').count(),
@@ -95,20 +102,19 @@ class DashboardStatsView(APIView):
                 'en_retard': en_retard.count(),
                 'retardataires': [
                     {
-                        'id': o.id,
-                        'nom': o.nom_complet,
+                        'id': o.id, 'nom': o.nom_complet,
                         'compartiment': o.compartiment.nom if o.compartiment else '—',
                         'depuis': str(o.date_prochain_paiement),
-                        'loyer': float(o.loyer),
+                        'loyer':  float(o.loyer),
                     }
                     for o in en_retard[:5]
                 ],
             },
             'paiements': {
-                'total_revenus':  float(sum(p.montant_verse for p in paiements)),
-                'revenus_mois':   float(revenus_mois),
-                'payes':          paiements.filter(statut='Payé').count(),
-                'en_attente':     paiements.filter(statut='En attente').count(),
+                'total_revenus': float(sum(p.montant_verse for p in paiements)),
+                'revenus_mois':  float(revenus_mois),
+                'payes':         paiements.filter(statut='Payé').count(),
+                'en_attente':    paiements.filter(statut='En attente').count(),
             },
         })
 
@@ -256,43 +262,29 @@ class OccupantLibererView(APIView):
 
 
 class OccupantContratPDFView(APIView):
-    """Génère un contrat de bail en PDF."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, occupant_id):
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.units import cm
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-            from reportlab.lib import colors
-        except ImportError:
+        rl = get_reportlab()
+        if not rl:
             return Response({'error': 'reportlab non installé.'}, status=500)
+        A4, getSampleStyleSheet, ParagraphStyle, cm, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, colors = rl
 
         occupant = get_object_or_404(Occupant, id=occupant_id)
         buffer   = io.BytesIO()
+        doc      = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2.5*cm, rightMargin=2.5*cm)
+        styles   = getSampleStyleSheet()
+        story    = []
 
-        doc    = SimpleDocTemplate(buffer, pagesize=A4,
-                                   topMargin=2*cm, bottomMargin=2*cm,
-                                   leftMargin=2.5*cm, rightMargin=2.5*cm)
-        styles = getSampleStyleSheet()
-        story  = []
+        title_style = ParagraphStyle('title', parent=styles['Title'], fontSize=18, spaceAfter=12, alignment=1)
+        h2_style    = ParagraphStyle('h2', parent=styles['Heading2'], fontSize=13, spaceAfter=6)
+        body_style  = ParagraphStyle('body', parent=styles['Normal'], fontSize=11, leading=16, spaceAfter=6)
 
-        title_style = ParagraphStyle('title', parent=styles['Title'],
-                                     fontSize=18, spaceAfter=12, alignment=1)
-        h2_style    = ParagraphStyle('h2', parent=styles['Heading2'],
-                                     fontSize=13, spaceAfter=6)
-        body_style  = ParagraphStyle('body', parent=styles['Normal'],
-                                     fontSize=11, leading=16, spaceAfter=6)
-
-        # En-tête
         story.append(Paragraph("CONTRAT DE BAIL", title_style))
         story.append(Paragraph(f"N° {occupant.numero_contrat}", styles['Normal']))
         story.append(Spacer(1, 0.5*cm))
 
-        # Infos propriétaire / locataire
         story.append(Paragraph("PARTIES", h2_style))
-
         data = [
             ['BAILLEUR', 'LOCATAIRE'],
             [
@@ -305,60 +297,45 @@ class OccupantContratPDFView(APIView):
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#C9A84C')),
             ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
             ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE',   (0,0), (-1,0), 11),
             ('ALIGN',      (0,0), (-1,-1), 'LEFT'),
             ('VALIGN',     (0,0), (-1,-1), 'TOP'),
             ('PADDING',    (0,0), (-1,-1), 8),
             ('GRID',       (0,0), (-1,-1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#F9F9F9')]),
         ]))
         story.append(t)
         story.append(Spacer(1, 0.5*cm))
 
-        # Bien loué
         story.append(Paragraph("BIEN LOUÉ", h2_style))
         comp = occupant.compartiment
         if comp:
-            story.append(Paragraph(
-                f"<b>Logement :</b> {comp.logement.nom} — {comp.logement.localisation}", body_style))
-            story.append(Paragraph(
-                f"<b>Compartiment :</b> {comp.nom} ({comp.get_type_display()})", body_style))
-            story.append(Paragraph(
-                f"<b>Composition :</b> {comp.chambres} chambre(s), {comp.salons} salon(s), "
-                f"{comp.douches} douche(s), {comp.cuisines} cuisine(s)", body_style))
+            story.append(Paragraph(f"<b>Logement :</b> {comp.logement.nom} — {comp.logement.localisation}", body_style))
+            story.append(Paragraph(f"<b>Compartiment :</b> {comp.nom} ({comp.get_type_display()})", body_style))
+            story.append(Paragraph(f"<b>Composition :</b> {comp.chambres} chambre(s), {comp.salons} salon(s), {comp.douches} douche(s), {comp.cuisines} cuisine(s)", body_style))
         story.append(Spacer(1, 0.3*cm))
 
-        # Conditions financières
         story.append(Paragraph("CONDITIONS FINANCIÈRES", h2_style))
-        story.append(Paragraph(
-            f"<b>Loyer mensuel :</b> {int(occupant.loyer):,} FCFA".replace(',', ' '), body_style))
-        story.append(Paragraph(
-            f"<b>Date d'entrée :</b> {occupant.date_debut_contrat.strftime('%d/%m/%Y')}", body_style))
-        story.append(Paragraph(
-            f"<b>Premier paiement :</b> {occupant.date_prochain_paiement.strftime('%d/%m/%Y')}", body_style))
+        story.append(Paragraph(f"<b>Loyer mensuel :</b> {int(occupant.loyer):,} FCFA".replace(',', ' '), body_style))
+        story.append(Paragraph(f"<b>Date d'entrée :</b> {occupant.date_debut_contrat.strftime('%d/%m/%Y')}", body_style))
+        story.append(Paragraph(f"<b>Premier paiement :</b> {occupant.date_prochain_paiement.strftime('%d/%m/%Y')}", body_style))
         story.append(Spacer(1, 0.5*cm))
 
-        # Clauses
         story.append(Paragraph("CLAUSES GÉNÉRALES", h2_style))
-        clauses = [
+        for clause in [
             "1. Le loyer est payable d'avance, au plus tard le 5 de chaque mois.",
             "2. Tout retard de paiement supérieur à 15 jours entraînera une pénalité.",
             "3. Le locataire s'engage à maintenir le bien en bon état d'entretien.",
             "4. Le locataire ne peut sous-louer le bien sans accord écrit du bailleur.",
             "5. Le présent contrat est établi pour une durée indéterminée avec préavis d'un mois.",
-        ]
-        for clause in clauses:
+        ]:
             story.append(Paragraph(clause, body_style))
         story.append(Spacer(1, 1*cm))
 
-        # Signatures
         story.append(Paragraph("SIGNATURES", h2_style))
-        sig_data = [
+        sig_table = Table([
             ['Le Bailleur', 'Le Locataire'],
             ['\n\n\n_________________', '\n\n\n_________________'],
             [f"Fait le {date.today().strftime('%d/%m/%Y')}", ''],
-        ]
-        sig_table = Table(sig_data, colWidths=[8*cm, 8*cm])
+        ], colWidths=[8*cm, 8*cm])
         sig_table.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('ALIGN',    (0,0), (-1,-1), 'CENTER'),
@@ -368,11 +345,228 @@ class OccupantContratPDFView(APIView):
 
         doc.build(story)
         buffer.seek(0)
-
         response = HttpResponse(buffer, content_type='application/pdf')
-        response['Content-Disposition'] = (
-            f'attachment; filename="contrat_{occupant.numero_contrat}.pdf"'
-        )
+        response['Content-Disposition'] = f'attachment; filename="contrat_{occupant.numero_contrat}.pdf"'
+        return response
+
+
+# ── REÇU DE PAIEMENT PDF ──────────────────────────
+
+class RecuPaiementPDFView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, paiement_id):
+        rl = get_reportlab()
+        if not rl:
+            return Response({'error': 'reportlab non installé.'}, status=500)
+        A4, getSampleStyleSheet, ParagraphStyle, cm, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, colors = rl
+
+        paiement = get_object_or_404(Paiement, id=paiement_id)
+        occupant = paiement.occupant
+        buffer   = io.BytesIO()
+        doc      = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2.5*cm, rightMargin=2.5*cm)
+        styles   = getSampleStyleSheet()
+        story    = []
+
+        title_style  = ParagraphStyle('title',  parent=styles['Title'],   fontSize=20, spaceAfter=6,  alignment=1)
+        center_style = ParagraphStyle('center', parent=styles['Normal'],  fontSize=11, spaceAfter=4,  alignment=1)
+        h2_style     = ParagraphStyle('h2',     parent=styles['Heading2'],fontSize=13, spaceAfter=6)
+        body_style   = ParagraphStyle('body',   parent=styles['Normal'],  fontSize=11, leading=16, spaceAfter=4)
+
+        # En-tête
+        story.append(Paragraph("REÇU DE PAIEMENT", title_style))
+        story.append(Paragraph(f"N° REÇU-{paiement.id:04d}", center_style))
+        story.append(Paragraph(f"Date : {paiement.date_paiement.strftime('%d/%m/%Y')}", center_style))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Montant en évidence
+        montant_data = [[f"{int(paiement.montant_verse):,} FCFA".replace(',', ' ')]]
+        montant_table = Table(montant_data, colWidths=[16*cm])
+        montant_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#C9A84C')),
+            ('TEXTCOLOR',  (0,0), (-1,-1), colors.HexColor('#0A0A0F')),
+            ('FONTNAME',   (0,0), (-1,-1), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0,0), (-1,-1), 24),
+            ('ALIGN',      (0,0), (-1,-1), 'CENTER'),
+            ('PADDING',    (0,0), (-1,-1), 16),
+            ('BORDERRADIUS',(0,0),(-1,-1), 8),
+        ]))
+        story.append(montant_table)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Infos locataire
+        story.append(Paragraph("LOCATAIRE", h2_style))
+        story.append(Paragraph(f"<b>Nom :</b> {occupant.nom_complet}", body_style))
+        story.append(Paragraph(f"<b>Téléphone :</b> {occupant.telephone}", body_style))
+        if occupant.compartiment:
+            story.append(Paragraph(f"<b>Logement :</b> {occupant.compartiment.logement.nom}", body_style))
+            story.append(Paragraph(f"<b>Compartiment :</b> {occupant.compartiment.nom}", body_style))
+        story.append(Spacer(1, 0.3*cm))
+
+        # Détails paiement
+        story.append(Paragraph("DÉTAILS DU PAIEMENT", h2_style))
+        details = [
+            ['Description', 'Valeur'],
+            ['Loyer mensuel',       f"{int(occupant.loyer):,} FCFA".replace(',', ' ')],
+            ['Nombre de mois',      str(paiement.nombre_mois)],
+            ['Période couverte',    f"Du {paiement.date_debut_periode.strftime('%d/%m/%Y')} au {paiement.date_fin_periode.strftime('%d/%m/%Y')}"],
+            ['Montant total versé', f"{int(paiement.montant_verse):,} FCFA".replace(',', ' ')],
+            ['Prochain paiement',   f"À partir du {(paiement.date_fin_periode).strftime('%d/%m/%Y')}"],
+            ['Statut',              paiement.statut],
+        ]
+        if paiement.note:
+            details.append(['Note', paiement.note])
+
+        t = Table(details, colWidths=[8*cm, 8*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND',    (0,0), (-1,0),  colors.HexColor('#1C1C27')),
+            ('TEXTCOLOR',     (0,0), (-1,0),  colors.HexColor('#C9A84C')),
+            ('FONTNAME',      (0,0), (-1,0),  'Helvetica-Bold'),
+            ('FONTSIZE',      (0,0), (-1,-1), 10),
+            ('ALIGN',         (0,0), (-1,-1), 'LEFT'),
+            ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+            ('PADDING',       (0,0), (-1,-1), 8),
+            ('GRID',          (0,0), (-1,-1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#F9F9F9')]),
+            ('FONTNAME',      (0,1), (0,-1),  'Helvetica-Bold'),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 1*cm))
+
+        # Signature
+        story.append(Paragraph("Signature du bailleur", h2_style))
+        story.append(Paragraph("\n\n\n_________________", body_style))
+        story.append(Spacer(1, 0.3*cm))
+        story.append(Paragraph(f"Émis le {date.today().strftime('%d/%m/%Y')}", center_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="recu_paiement_{paiement.id:04d}.pdf"'
+        return response
+
+
+# ── RAPPORT MENSUEL PDF ───────────────────────────
+
+class RapportMensuelPDFView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rl = get_reportlab()
+        if not rl:
+            return Response({'error': 'reportlab non installé.'}, status=500)
+        A4, getSampleStyleSheet, ParagraphStyle, cm, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, colors = rl
+
+        mois_param  = request.query_params.get('mois',  date.today().month)
+        annee_param = request.query_params.get('annee', date.today().year)
+        mois  = int(mois_param)
+        annee = int(annee_param)
+
+        nom_mois = ['', 'Janvier','Février','Mars','Avril','Mai','Juin',
+                    'Juillet','Août','Septembre','Octobre','Novembre','Décembre'][mois]
+
+        paiements_mois = Paiement.objects.filter(
+            date_paiement__month=mois, date_paiement__year=annee
+        ).select_related('occupant', 'occupant__compartiment', 'occupant__logement')
+
+        occupants_actifs = Occupant.objects.filter(actif=True).select_related('compartiment', 'logement')
+        total_attendu    = sum(o.loyer for o in occupants_actifs)
+        total_encaisse   = sum(p.montant_verse for p in paiements_mois)
+        occupants_payes  = set(p.occupant_id for p in paiements_mois)
+        occupants_retard = [o for o in occupants_actifs if o.id not in occupants_payes]
+
+        buffer = io.BytesIO()
+        doc    = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2*cm, rightMargin=2*cm)
+        styles = getSampleStyleSheet()
+        story  = []
+
+        title_style  = ParagraphStyle('title',  parent=styles['Title'],   fontSize=18, spaceAfter=4,  alignment=1)
+        center_style = ParagraphStyle('center', parent=styles['Normal'],  fontSize=11, spaceAfter=4,  alignment=1)
+        h2_style     = ParagraphStyle('h2',     parent=styles['Heading2'],fontSize=13, spaceAfter=6,  spaceBefore=12)
+        body_style   = ParagraphStyle('body',   parent=styles['Normal'],  fontSize=10, leading=14, spaceAfter=4)
+
+        story.append(Paragraph(f"RAPPORT MENSUEL — {nom_mois} {annee}", title_style))
+        story.append(Paragraph(f"Généré le {date.today().strftime('%d/%m/%Y')}", center_style))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Résumé financier
+        story.append(Paragraph("RÉSUMÉ FINANCIER", h2_style))
+        resume = [
+            ['', ''],
+            ['Total attendu ce mois',   f"{int(total_attendu):,} FCFA".replace(',', ' ')],
+            ['Total encaissé',          f"{int(total_encaisse):,} FCFA".replace(',', ' ')],
+            ['Reste à encaisser',       f"{int(total_attendu - total_encaisse):,} FCFA".replace(',', ' ')],
+            ['Taux de recouvrement',    f"{int((total_encaisse/total_attendu*100) if total_attendu > 0 else 0)} %"],
+            ['Nombre de paiements',     str(paiements_mois.count())],
+            ['Locataires en retard',    str(len(occupants_retard))],
+        ]
+        t_resume = Table(resume, colWidths=[9*cm, 7*cm])
+        t_resume.setStyle(TableStyle([
+            ('SPAN',         (0,0), (-1,0)),
+            ('BACKGROUND',   (0,0), (-1,0),  colors.HexColor('#C9A84C')),
+            ('TEXTCOLOR',    (0,0), (-1,0),  colors.HexColor('#0A0A0F')),
+            ('FONTNAME',     (0,0), (-1,0),  'Helvetica-Bold'),
+            ('FONTSIZE',     (0,0), (-1,-1), 11),
+            ('ALIGN',        (1,1), (1,-1),  'RIGHT'),
+            ('FONTNAME',     (0,1), (0,-1),  'Helvetica-Bold'),
+            ('PADDING',      (0,0), (-1,-1), 8),
+            ('GRID',         (0,0), (-1,-1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.white, colors.HexColor('#F5F5F5')]),
+        ]))
+        story.append(t_resume)
+
+        # Paiements reçus
+        if paiements_mois.exists():
+            story.append(Paragraph("PAIEMENTS REÇUS", h2_style))
+            rows = [['Locataire', 'Compartiment', 'Période', 'Montant', 'Date']]
+            for p in paiements_mois:
+                rows.append([
+                    p.occupant.nom_complet,
+                    p.occupant.compartiment.nom if p.occupant.compartiment else '—',
+                    f"{p.date_debut_periode.strftime('%d/%m')} → {p.date_fin_periode.strftime('%d/%m/%Y')}",
+                    f"{int(p.montant_verse):,}".replace(',', ' '),
+                    p.date_paiement.strftime('%d/%m/%Y'),
+                ])
+            t_pay = Table(rows, colWidths=[4.5*cm, 3.5*cm, 4*cm, 3*cm, 2.5*cm])
+            t_pay.setStyle(TableStyle([
+                ('BACKGROUND',    (0,0), (-1,0),  colors.HexColor('#1C1C27')),
+                ('TEXTCOLOR',     (0,0), (-1,0),  colors.HexColor('#C9A84C')),
+                ('FONTNAME',      (0,0), (-1,0),  'Helvetica-Bold'),
+                ('FONTSIZE',      (0,0), (-1,-1), 9),
+                ('ALIGN',         (0,0), (-1,-1), 'LEFT'),
+                ('PADDING',       (0,0), (-1,-1), 6),
+                ('GRID',          (0,0), (-1,-1), 0.3, colors.grey),
+                ('ROWBACKGROUNDS',(0,1),(-1,-1),  [colors.white, colors.HexColor('#F5F5F5')]),
+            ]))
+            story.append(t_pay)
+
+        # Retards
+        if occupants_retard:
+            story.append(Paragraph("LOCATAIRES EN RETARD", h2_style))
+            rows_r = [['Locataire', 'Téléphone', 'Compartiment', 'Loyer mensuel']]
+            for o in occupants_retard:
+                rows_r.append([
+                    o.nom_complet, o.telephone,
+                    o.compartiment.nom if o.compartiment else '—',
+                    f"{int(o.loyer):,} FCFA".replace(',', ' '),
+                ])
+            t_retard = Table(rows_r, colWidths=[4.5*cm, 3.5*cm, 4*cm, 4*cm])
+            t_retard.setStyle(TableStyle([
+                ('BACKGROUND',    (0,0), (-1,0),  colors.HexColor('#E05C5C')),
+                ('TEXTCOLOR',     (0,0), (-1,0),  colors.white),
+                ('FONTNAME',      (0,0), (-1,0),  'Helvetica-Bold'),
+                ('FONTSIZE',      (0,0), (-1,-1), 9),
+                ('ALIGN',         (0,0), (-1,-1), 'LEFT'),
+                ('PADDING',       (0,0), (-1,-1), 6),
+                ('GRID',          (0,0), (-1,-1), 0.3, colors.grey),
+                ('ROWBACKGROUNDS',(0,1),(-1,-1),  [colors.HexColor('#FFF5F5'), colors.white]),
+            ]))
+            story.append(t_retard)
+
+        doc.build(story)
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="rapport_{nom_mois}_{annee}.pdf"'
         return response
 
 
