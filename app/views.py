@@ -24,13 +24,19 @@ class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        email    = request.data.get('email', '')
+        username = request.data.get('username', '').strip()
+        password = request.data.get('password', '')
+        email    = request.data.get('email', '').strip()
+
         if not username or not password:
             return Response({'error': 'Username et password sont requis.'}, status=400)
+        if len(password) < 8:
+            return Response({'error': 'Le mot de passe doit contenir au moins 8 caractères.'}, status=400)
         if User.objects.filter(username=username).exists():
             return Response({'error': 'Ce nom d\'utilisateur existe déjà.'}, status=400)
+        if email and User.objects.filter(email__iexact=email).exists():
+            return Response({'error': 'Cet email est déjà associé à un compte.'}, status=400)
+
         user    = User.objects.create_user(username=username, password=password, email=email)
         refresh = RefreshToken.for_user(user)
         return Response({

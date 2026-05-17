@@ -24,7 +24,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # ← EN PREMIER obligatoire
+    'corsheaders.middleware.CorsMiddleware',
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -41,7 +41,6 @@ CORS_ALLOWED_ORIGINS = [
     "https://gimmopro.vercel.app",
     "https://gimmopro-cuq15jjtj-aloysrussel1s-projects.vercel.app",
 ]
-
 CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = "gimmopro_backend.urls"
@@ -71,6 +70,13 @@ DATABASES = {
     }
 }
 
+# ── Authentification ──────────────────────────────
+# Permet login avec username OU email
+AUTHENTICATION_BACKENDS = [
+    'app.backends.EmailOrUsernameBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -81,9 +87,9 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME':  timedelta(hours=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS':  True,
+    'ACCESS_TOKEN_LIFETIME':    timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME':   timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS':    True,
     'BLACKLIST_AFTER_ROTATION': True,
 }
 
@@ -95,9 +101,9 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "fr-ca"
-TIME_ZONE = "America/Toronto"
-USE_I18N = True
-USE_TZ = True
+TIME_ZONE     = "America/Toronto"
+USE_I18N      = True
+USE_TZ        = True
 
-STATIC_URL = "static/"
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+STATIC_URL          = "static/"
+DEFAULT_AUTO_FIELD  = "django.db.models.BigAutoField"
