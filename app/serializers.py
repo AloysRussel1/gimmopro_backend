@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from datetime import timedelta
-from .models import Logement, Compartiment, Occupant, Paiement
+from .models import Logement, Compartiment, Occupant, Paiement, HistoriqueOccupation
 
 
 class LogementSerializer(serializers.ModelSerializer):
@@ -31,9 +31,19 @@ class CompartimentSerializer(serializers.ModelSerializer):
                   'occupant_actuel']
 
 
+class HistoriqueOccupationSerializer(serializers.ModelSerializer):
+    duree_jours = serializers.ReadOnlyField()
+
+    class Meta:
+        model  = HistoriqueOccupation
+        fields = ['id', 'nom_occupant', 'date_entree', 'date_sortie',
+                  'loyer', 'duree_jours']
+
+
 class OccupantSerializer(serializers.ModelSerializer):
-    compartiment_nom = serializers.CharField(source='compartiment.nom', read_only=True)
-    logement_nom     = serializers.CharField(source='logement.nom',     read_only=True)
+    compartiment_nom = serializers.CharField(source='compartiment.nom',     read_only=True)
+    logement_nom     = serializers.CharField(source='logement.nom',         read_only=True)
+    logement_loc     = serializers.CharField(source='logement.localisation', read_only=True)
 
     class Meta:
         model  = Occupant
@@ -42,8 +52,9 @@ class OccupantSerializer(serializers.ModelSerializer):
             'numero_contrat', 'date_debut_contrat', 'loyer',
             'date_prochain_paiement', 'statut', 'actif',
             'compartiment', 'compartiment_nom',
-            'logement', 'logement_nom',
+            'logement', 'logement_nom', 'logement_loc',
         ]
+        read_only_fields = ['numero_contrat']
 
     def validate(self, data):
         compartiment = data.get('compartiment')
@@ -57,7 +68,7 @@ class OccupantSerializer(serializers.ModelSerializer):
 
 
 class PaiementSerializer(serializers.ModelSerializer):
-    occupant_nom     = serializers.CharField(source='occupant.nom_complet', read_only=True)
+    occupant_nom     = serializers.CharField(source='occupant.nom_complet',      read_only=True)
     compartiment_nom = serializers.CharField(source='occupant.compartiment.nom', read_only=True)
 
     class Meta:
