@@ -11,47 +11,33 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import Logement, Compartiment, Occupant, Paiement
 from .serializers import (
-    LogementSerializer,
-    CompartimentSerializer,
-    OccupantSerializer,
-    PaiementSerializer,
+    LogementSerializer, CompartimentSerializer,
+    OccupantSerializer, PaiementSerializer,
 )
 
 
-# ─────────────────────────────────────────
-# AUTH
-# ─────────────────────────────────────────
+# ── AUTH ──────────────────────────────────────────
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
-        email = request.data.get("email", "")
+        username = request.data.get('username')
+        password = request.data.get('password')
+        email    = request.data.get('email', '')
 
         if not username or not password:
-            return Response(
-                {"error": "Username et password sont requis."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({'error': 'Username et password sont requis.'}, status=400)
         if User.objects.filter(username=username).exists():
-            return Response(
-                {"error": "Ce nom d'utilisateur existe déjà."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({'error': 'Ce nom d\'utilisateur existe déjà.'}, status=400)
 
-        user = User.objects.create_user(username=username, password=password, email=email)
+        user    = User.objects.create_user(username=username, password=password, email=email)
         refresh = RefreshToken.for_user(user)
-        return Response(
-            {
-                "message": "Compte créé avec succès.",
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        return Response({
+            'message': 'Compte créé avec succès.',
+            'access':  str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=201)
 
 
 class LogoutView(APIView):
@@ -59,238 +45,210 @@ class LogoutView(APIView):
 
     def post(self, request):
         try:
-            refresh_token = request.data.get("refresh")
-            token = RefreshToken(refresh_token)
+            token = RefreshToken(request.data.get('refresh'))
             token.blacklist()
-            return Response({"message": "Déconnexion réussie."}, status=status.HTTP_200_OK)
+            return Response({'message': 'Déconnexion réussie.'})
         except Exception:
-            return Response({"error": "Token invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Token invalide.'}, status=400)
 
 
-# ─────────────────────────────────────────
-# DASHBOARD STATS
-# ─────────────────────────────────────────
+# ── DASHBOARD ─────────────────────────────────────
 
 class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        total_logements = Logement.objects.count()
-        total_compartiments = Compartiment.objects.count()
-        compartiments_libres = Compartiment.objects.filter(statut="LIBRE").count()
-        compartiments_occupes = Compartiment.objects.filter(statut="OCCUPE").count()
-
-        total_occupants = Occupant.objects.count()
-        occupants_actifs = Occupant.objects.filter(statut="Actif").count()
-        occupants_en_retard = Occupant.objects.filter(statut="En retard").count()
-
         paiements = Paiement.objects.all()
-        total_revenus = sum(p.montant_verse for p in paiements)
-        paiements_en_attente = paiements.filter(statut="En attente").count()
-        paiements_payes = paiements.filter(statut="Payé").count()
-
-        return Response(
-            {
-                "logements": {
-                    "total": total_logements,
-                },
-                "compartiments": {
-                    "total": total_compartiments,
-                    "libres": compartiments_libres,
-                    "occupes": compartiments_occupes,
-                },
-                "occupants": {
-                    "total": total_occupants,
-                    "actifs": occupants_actifs,
-                    "en_retard": occupants_en_retard,
-                },
-                "paiements": {
-                    "total_revenus": float(total_revenus),
-                    "payes": paiements_payes,
-                    "en_attente": paiements_en_attente,
-                },
+        return Response({
+            'logements': {
+                'total': Logement.objects.count(),
             },
-            status=status.HTTP_200_OK,
-        )
+            'compartiments': {
+                'total':   Compartiment.objects.count(),
+                'libres':  Compartiment.objects.filter(statut='LIBRE').count(),
+                'occupes': Compartiment.objects.filter(statut='OCCUPE').count(),
+            },
+            'occupants': {
+                'total':     Occupant.objects.filter(actif=True).count(),
+                'actifs':    Occupant.objects.filter(statut='Actif', actif=True).count(),
+                'en_retard': Occupant.objects.filter(statut='En retard', actif=True).count(),
+            },
+            'paiements': {
+                'total_revenus': float(sum(p.montant_verse for p in paiements)),
+                'payes':         paiements.filter(statut='Payé').count(),
+                'en_attente':    paiements.filter(statut='En attente').count(),
+            },
+        })
 
 
-# ─────────────────────────────────────────
-# LOGEMENTS
-# ─────────────────────────────────────────
+# ── LOGEMENTS ─────────────────────────────────────
 
 class LogementListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        logements = Logement.objects.all()
-        serializer = LogementSerializer(logements, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        serializer = LogementSerializer(Logement.objects.all(), many=True)
+        return Response(serializer.data)
 
     def post(self, request):
         serializer = LogementSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
 
 
 class LogementDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, logement_id):
-        logement = get_object_or_404(Logement, id=logement_id)
+        logement   = get_object_or_404(Logement, id=logement_id)
         serializer = LogementSerializer(logement)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data)
 
     def put(self, request, logement_id):
-        logement = get_object_or_404(Logement, id=logement_id)
+        logement   = get_object_or_404(Logement, id=logement_id)
         serializer = LogementSerializer(logement, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
 
     def delete(self, request, logement_id):
-        logement = get_object_or_404(Logement, id=logement_id)
-        logement.delete()
-        return Response({"message": "Logement supprimé."}, status=status.HTTP_204_NO_CONTENT)
+        get_object_or_404(Logement, id=logement_id).delete()
+        return Response({'message': 'Logement supprimé.'}, status=204)
 
 
-# ─────────────────────────────────────────
-# COMPARTIMENTS
-# ─────────────────────────────────────────
+# ── COMPARTIMENTS ─────────────────────────────────
 
 class CompartimentsByLogementView(ListAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = CompartimentSerializer
+    serializer_class   = CompartimentSerializer
 
     def get_queryset(self):
-        logement_id = self.kwargs.get("logement_id")
-        return Compartiment.objects.filter(logement_id=logement_id)
+        qs = Compartiment.objects.filter(logement_id=self.kwargs['logement_id'])
+        statut = self.request.query_params.get('statut')
+        if statut:
+            qs = qs.filter(statut=statut)
+        return qs
 
 
 class CompartimentCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, logement_id):
-        logement = get_object_or_404(Logement, id=logement_id)
+        logement   = get_object_or_404(Logement, id=logement_id)
         serializer = CompartimentSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(logement=logement)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
 
 
 class CompartimentDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, compartiment_id):
-        compartiment = get_object_or_404(Compartiment, id=compartiment_id)
-        serializer = CompartimentSerializer(compartiment)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        c = get_object_or_404(Compartiment, id=compartiment_id)
+        return Response(CompartimentSerializer(c).data)
 
     def put(self, request, compartiment_id):
-        compartiment = get_object_or_404(Compartiment, id=compartiment_id)
-        serializer = CompartimentSerializer(compartiment, data=request.data, partial=True)
+        c          = get_object_or_404(Compartiment, id=compartiment_id)
+        serializer = CompartimentSerializer(c, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
 
     def delete(self, request, compartiment_id):
-        compartiment = get_object_or_404(Compartiment, id=compartiment_id)
-        compartiment.delete()
-        return Response({"message": "Compartiment supprimé."}, status=status.HTTP_204_NO_CONTENT)
+        get_object_or_404(Compartiment, id=compartiment_id).delete()
+        return Response({'message': 'Compartiment supprimé.'}, status=204)
 
 
-# ─────────────────────────────────────────
-# OCCUPANTS
-# ─────────────────────────────────────────
+# ── OCCUPANTS ─────────────────────────────────────
 
 class OccupantListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        occupants = Occupant.objects.all()
-        serializer = OccupantSerializer(occupants, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        qs = Occupant.objects.filter(actif=True)
+        compartiment_id = request.query_params.get('compartiment_id')
+        logement_id     = request.query_params.get('logement_id')
+        if compartiment_id:
+            qs = qs.filter(compartiment_id=compartiment_id)
+        if logement_id:
+            qs = qs.filter(logement_id=logement_id)
+        return Response(OccupantSerializer(qs, many=True).data)
 
     def post(self, request):
-        # Conversion de date si nécessaire
-        data = request.data.copy()
-        for field in ["date_debut_contrat", "date_prochain_paiement"]:
-            if field in data:
-                try:
-                    data[field] = datetime.strptime(data[field], "%d/%m/%Y").strftime("%Y-%m-%d")
-                except ValueError:
-                    pass
-
-        serializer = OccupantSerializer(data=data)
+        serializer = OccupantSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            occupant = serializer.save()
+            # Lier automatiquement le logement depuis le compartiment
+            if occupant.compartiment and not occupant.logement:
+                occupant.logement = occupant.compartiment.logement
+                occupant.save()
+            return Response(OccupantSerializer(occupant).data, status=201)
+        return Response(serializer.errors, status=400)
 
 
 class OccupantDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, occupant_id):
-        occupant = get_object_or_404(Occupant, id=occupant_id)
-        serializer = OccupantSerializer(occupant)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        o = get_object_or_404(Occupant, id=occupant_id)
+        return Response(OccupantSerializer(o).data)
 
     def put(self, request, occupant_id):
-        occupant = get_object_or_404(Occupant, id=occupant_id)
-        serializer = OccupantSerializer(occupant, data=request.data, partial=True)
+        o          = get_object_or_404(Occupant, id=occupant_id)
+        serializer = OccupantSerializer(o, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
 
     def delete(self, request, occupant_id):
+        get_object_or_404(Occupant, id=occupant_id).delete()
+        return Response({'message': 'Occupant supprimé.'}, status=204)
+
+
+class OccupantLibererView(APIView):
+    """Marque un occupant comme parti et libère son compartiment."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, occupant_id):
         occupant = get_object_or_404(Occupant, id=occupant_id)
-        occupant.delete()
-        return Response({"message": "Occupant supprimé."}, status=status.HTTP_204_NO_CONTENT)
+        occupant.liberer()
+        return Response({'message': f'{occupant.nom_complet} a quitté le logement.'})
 
 
-# ─────────────────────────────────────────
-# PAIEMENTS
-# ─────────────────────────────────────────
+# ── PAIEMENTS ─────────────────────────────────────
 
 class PaiementListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        occupant_id = request.query_params.get("occupant_id")
+        qs = Paiement.objects.all()
+        occupant_id = request.query_params.get('occupant_id')
         if occupant_id:
-            paiements = Paiement.objects.filter(occupant_id=occupant_id).order_by("-date_paiement")
-        else:
-            paiements = Paiement.objects.all().order_by("-date_paiement")
-        serializer = PaiementSerializer(paiements, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+            qs = qs.filter(occupant_id=occupant_id)
+        return Response(PaiementSerializer(qs, many=True).data)
 
     def post(self, request):
         serializer = PaiementSerializer(data=request.data)
         if serializer.is_valid():
-            paiement = serializer.save()
-            # Mettre à jour la date de prochain paiement de l'occupant
-            occupant = paiement.occupant
-            occupant.date_prochain_paiement = paiement.date_prochain_paiement
-            occupant.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
 
 
 class PaiementDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, paiement_id):
-        paiement = get_object_or_404(Paiement, id=paiement_id)
-        serializer = PaiementSerializer(paiement)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        p = get_object_or_404(Paiement, id=paiement_id)
+        return Response(PaiementSerializer(p).data)
 
     def delete(self, request, paiement_id):
-        paiement = get_object_or_404(Paiement, id=paiement_id)
-        paiement.delete()
-        return Response({"message": "Paiement supprimé."}, status=status.HTTP_204_NO_CONTENT)
+        get_object_or_404(Paiement, id=paiement_id).delete()
+        return Response({'message': 'Paiement supprimé.'}, status=204)

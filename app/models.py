@@ -1,96 +1,130 @@
 from django.db import models
-from datetime import timedelta, date
+from datetime import date, timedelta
 from django.utils import timezone
 
-# Modele de logement
+
 class Logement(models.Model):
-    nom = models.CharField(max_length=200, unique=True)
+    nom          = models.CharField(max_length=200, unique=True)
     localisation = models.CharField(max_length=300)
-    description = models.TextField(blank=True)
+    description  = models.TextField(blank=True)
 
     def __str__(self):
         return self.nom
 
+    @property
+    def nb_compartiments(self):
+        return self.compartiments.count()
+
+    @property
+    def nb_occupes(self):
+        return self.compartiments.filter(statut='OCCUPE').count()
+
+    @property
+    def nb_libres(self):
+        return self.compartiments.filter(statut='LIBRE').count()
+
+
 class Compartiment(models.Model):
     TYPE_CHOICES = [
-        ('CHAMBRE', 'Chambre'),
+        ('CHAMBRE',     'Chambre'),
         ('APPARTEMENT', 'Appartement'),
-        ('STUDIO', 'Studio'),
-        ('BOUTIQUE', 'Boutique'),
+        ('STUDIO',      'Studio'),
+        ('BOUTIQUE',    'Boutique'),
     ]
-    type = models.CharField(max_length=20, choices=TYPE_CHOICES)
-    nom = models.CharField(max_length=200)
-    
     STATUT_CHOICES = [
-        ('LIBRE', 'Libre'),
+        ('LIBRE',  'Libre'),
         ('OCCUPE', 'Occupé'),
     ]
-    statut = models.CharField(max_length=10, choices=STATUT_CHOICES, default='LIBRE')
-    
-    # Remplacer 'id_ocupant' par une clé étrangère vers Occupant
-    occupant = models.ForeignKey('Occupant', on_delete=models.SET_NULL, null=True, blank=True)
-    
-    # Relation avec le modèle Logement
-    logement = models.ForeignKey(
-        'Logement',  # Relation avec le modèle Logement
-        on_delete=models.CASCADE,  # Supprime les compartiments si le logement est supprimé
-        related_name='compartiments'  # Permet d'accéder aux compartiments via logement.compartiments.all()
-    )
-    chambres = models.IntegerField(default=0)
-    salons = models.IntegerField(default=0)
-    douches = models.IntegerField(default=0)
-    cuisines = models.IntegerField(default=0)
+
+    logement  = models.ForeignKey(Logement, on_delete=models.CASCADE, related_name='compartiments')
+    type      = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    nom       = models.CharField(max_length=200)
+    statut    = models.CharField(max_length=10, choices=STATUT_CHOICES, default='LIBRE')
+    chambres  = models.IntegerField(default=0)
+    salons    = models.IntegerField(default=0)
+    douches   = models.IntegerField(default=0)
+    cuisines  = models.IntegerField(default=0)
 
     def __str__(self):
-        return f"{self.type} - {self.nom} ({self.get_statut_display()})"
+        return f"{self.nom} ({self.get_type_display()}) — {self.get_statut_display()}"
+
+    @property
+    def occupant_actuel(self):
+        return self.occupants.filter(actif=True).first()
+
+
 class Occupant(models.Model):
-    logement = models.ForeignKey(Logement, null=True, blank=True, on_delete=models.SET_NULL)
-    email = models.EmailField(unique=True)
-    telephone = models.CharField(max_length=15)
-    cni = models.CharField(max_length=20, unique=True)
-    nom_complet = models.CharField(max_length=255)
-    numero_contrat = models.CharField(max_length=50, unique=True)
-    date_debut_contrat = models.DateField()
-    loyer = models.DecimalField(max_digits=10, decimal_places=2)
+    compartiment           = models.ForeignKey(
+        Compartiment, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='occupants'
+    )
+    logement               = models.ForeignKey(
+        Logement, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='occupants'
+    )
+    nom_complet            = models.CharField(max_length=255)
+    email                  = models.EmailField(unique=True)
+    telephone              = models.CharField(max_length=20)
+    cni                    = models.CharField(max_length=20, unique=True)
+    numero_contrat         = models.CharField(max_length=50, unique=True)
+    date_debut_contrat     = models.DateField()
+    loyer                  = models.DecimalField(max_digits=10, decimal_places=2)
     date_prochain_paiement = models.DateField()
-    statut = models.CharField(max_length=20, choices=[('Actif', 'Actif'), ('En retard', 'En retard')])
+    statut                 = models.CharField(
+        max_length=20,
+        choices=[('Actif', 'Actif'), ('En retard', 'En retard'), ('Parti', 'Parti')],
+        default='Actif'
+    )
+    actif = models.BooleanField(default=True)
 
     def __str__(self):
         return self.nom_complet
 
     def calculer_statut(self):
+        if not self.actif:
+            self.statut = 'Parti'
+            return
         today = date.today()
-        if today > self.date_prochain_paiement:
-            self.statut = 'En retard'
-        else:
-            self.statut = 'Actif'
-        # NE PAS appeler self.save() ici
+        self.statut = 'En retard' if today > self.date_prochain_paiement else 'Actif'
 
     def save(self, *args, **kwargs):
-        self.calculer_statut()  # met à jour le statut
-        super(Occupant, self).save(*args, **kwargs)  # sauvegarde une seule fois
+        self.calculer_statut()
+        super().save(*args, **kwargs)
+        if self.compartiment:
+            nouveau_statut = 'OCCUPE' if self.actif else (
+                'OCCUPE' if self.compartiment.occupants.filter(actif=True).exclude(pk=self.pk).exists()
+                else 'LIBRE'
+            )
+            Compartiment.objects.filter(pk=self.compartiment.pk).update(statut=nouveau_statut)
+
+    def liberer(self):
+        self.actif = False
+        self.save()
 
 
-
-# Modèle de Paiement
 class Paiement(models.Model):
-    occupant = models.ForeignKey('Occupant', on_delete=models.CASCADE, related_name='paiements')
-    montant_verse = models.DecimalField(max_digits=10, decimal_places=2)
-    date_paiement = models.DateField(default=timezone.now)
-    date_prochain_paiement = models.DateField()
-    statut = models.CharField(max_length=20, choices=[('Payé', 'Payé'), ('En attente', 'En attente')])
+    occupant           = models.ForeignKey(Occupant, on_delete=models.CASCADE, related_name='paiements')
+    montant_verse      = models.DecimalField(max_digits=10, decimal_places=2)
+    nombre_mois        = models.IntegerField(default=1)
+    date_paiement      = models.DateField(default=timezone.now)
+    date_debut_periode = models.DateField()
+    date_fin_periode   = models.DateField()
+    statut             = models.CharField(
+        max_length=20,
+        choices=[('Payé', 'Payé'), ('En attente', 'En attente')],
+        default='Payé'
+    )
+    note = models.TextField(blank=True)
 
     def __str__(self):
-        return f'Paiement de {self.montant_verse} pour {self.occupant.nom_complet}'
+        return f"{self.occupant.nom_complet} — {self.montant_verse} ({self.nombre_mois} mois)"
 
     def save(self, *args, **kwargs):
-        # Mettre à jour le statut de paiement en fonction de la date de paiement
-        if self.date_paiement <= self.date_prochain_paiement:
-            self.statut = 'Payé'
-        else:
-            self.statut = 'En retard'
-        super(Paiement, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
+        next_date = self.date_fin_periode + timedelta(days=1)
+        Occupant.objects.filter(pk=self.occupant.pk).update(
+            date_prochain_paiement=next_date
+        )
 
     class Meta:
-        verbose_name = "Paiement"
-        verbose_name_plural = "Paiements"
+        ordering = ['-date_paiement']
