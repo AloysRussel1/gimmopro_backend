@@ -38,6 +38,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:8100",
     "http://localhost:3000",
+    "https://gimmopro.vercel.app",
     "https://gimmopro-cuq15jjtj-aloysrussel1s-projects.vercel.app",
 ]
 
