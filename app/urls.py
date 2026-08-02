@@ -1,12 +1,12 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 urlpatterns = [
     # Auth
-    path('auth/register/', views.RegisterView.as_view(),    name='register'),
-    path('auth/login/',    TokenObtainPairView.as_view(),   name='token_obtain_pair'),
-    path('auth/refresh/',  TokenRefreshView.as_view(),      name='token_refresh'),
+    path('auth/register/', views.RegisterView.as_view(),             name='register'),
+    path('auth/login/',    views.CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/refresh/',  TokenRefreshView.as_view(),                name='token_refresh'),
     path('auth/logout/',   views.LogoutView.as_view(),      name='logout'),
     path('auth/password-reset/',         views.PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('auth/password-reset/confirm/', views.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
@@ -64,4 +64,28 @@ urlpatterns = [
 
     # Notifications / rappels d'échéances
     path('notifications/dashboard/', views.NotificationsDashboardView.as_view(), name='notifications-dashboard'),
+
+    # ── ADMINISTRATION (IsAdminUser uniquement — cross-tenant) ──────
+    path('admin/stats/',   views.AdminStatsView.as_view(),   name='admin-stats'),
+    path('admin/users/',   views.AdminUsersListView.as_view(), name='admin-users-list'),
+    path('admin/users/<int:user_id>/toggle-active/',  views.AdminUserToggleActiveView.as_view(),  name='admin-user-toggle-active'),
+    path('admin/users/<int:user_id>/reset-password/', views.AdminUserResetPasswordView.as_view(), name='admin-user-reset-password'),
+
+    path('admin/logements/',              views.AdminLogementListCreateView.as_view(), name='admin-logement-list-create'),
+    path('admin/logements/<int:pk>/',     views.AdminLogementDetailView.as_view(),     name='admin-logement-detail'),
+    path('admin/logements/<int:logement_id>/compartiments/', views.AdminCompartimentsByLogementView.as_view(), name='admin-logement-compartiments'),
+
+    path('admin/occupants/',              views.AdminOccupantListCreateView.as_view(), name='admin-occupant-list-create'),
+    path('admin/occupants/<int:occupant_id>/', views.AdminOccupantDetailView.as_view(), name='admin-occupant-detail'),
+
+    path('admin/paiements/',              views.AdminPaiementListCreateView.as_view(), name='admin-paiement-list-create'),
+    path('admin/paiements/<int:paiement_id>/', views.AdminPaiementDetailView.as_view(), name='admin-paiement-detail'),
+
+    path('admin/depenses/',               views.AdminDepenseListCreateView.as_view(),  name='admin-depense-list-create'),
+    path('admin/depenses/<int:pk>/',      views.AdminDepenseDetailView.as_view(),      name='admin-depense-detail'),
+
+    path('admin/etat-des-lieux/',         views.AdminEtatDesLieuxListCreateView.as_view(), name='admin-edl-list-create'),
+    path('admin/etat-des-lieux/<int:pk>/', views.AdminEtatDesLieuxDetailView.as_view(),    name='admin-edl-detail'),
+
+    path('admin/activity-logs/', views.AdminActivityLogListView.as_view(), name='admin-activity-logs'),
 ]

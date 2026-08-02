@@ -421,3 +421,30 @@ class EtatDesLieux(models.Model):
         if self.occupant_id and not self.compartiment_id:
             self.compartiment = self.occupant.compartiment
         super().save(*args, **kwargs)
+
+
+class ActivityLog(models.Model):
+    """Journal des actions clés de la plateforme (pas un audit exhaustif de
+    chaque requête) — alimente l'onglet "Logs" de l'interface admin."""
+    ACTION_CHOICES = [
+        ('REGISTER',             'Inscription'),
+        ('LOGIN',                'Connexion'),
+        ('ACCOUNT_ACTIVATED',    'Compte activé'),
+        ('ACCOUNT_DEACTIVATED',  'Compte désactivé'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name='activity_logs'
+    )
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
+    # Capture une info identifiante (ex: email) au moment du log — reste
+    # lisible même si le compte est supprimé plus tard (user devient NULL).
+    description = models.CharField(max_length=255, blank=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date_creation']
+
+    def __str__(self):
+        return f"{self.get_action_display()} — {self.description or self.user}"

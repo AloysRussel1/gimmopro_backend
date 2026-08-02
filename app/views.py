@@ -10,36 +10,42 @@ from django.http import HttpResponse, FileResponse, Http404
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.utils.decorators import method_decorator
 from django.db import transaction, IntegrityError
-from django.db.models import Sum
+from django.db.models import Sum, Count
 from django.db.models.functions import TruncMonth
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta
 import io
 import calendar
 
+from rest_framework import generics
 from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import (
     Logement, Compartiment, Occupant, Paiement, HistoriqueOccupation, Profile, Depense,
-    Document, EtatDesLieux,
+    Document, EtatDesLieux, ActivityLog,
 )
 from .serializers import (
     LogementSerializer, CompartimentSerializer,
     OccupantSerializer, PaiementSerializer, HistoriqueOccupationSerializer,
     ProfileSerializer, DepenseSerializer,
     DocumentSerializer, EtatDesLieuxSerializer,
+    AdminLogementSerializer, AdminUserSerializer, ActivityLogSerializer,
 )
+from .pagination import StandardResultsSetPagination
 from .utils import (
     montant_en_lettres_fcfa, verify_recu_token,
     get_logement_or_404, get_compartiment_or_404, get_occupant_or_404, get_paiement_or_404,
     get_depense_or_404, get_document_or_404, get_etat_des_lieux_or_404,
     make_password_reset_token, verify_password_reset_token, envoyer_email_reset_password,
     make_email_verify_token, verify_email_verify_token, envoyer_email_verification,
+    _generer_username_depuis_email, log_activity,
 )
 
 NOM_MOIS = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -63,20 +69,6 @@ def get_reportlab():
 
 
 # ── AUTH ──────────────────────────────────────────
-
-def _generer_username_depuis_email(email):
-    """Django's built-in User a toujours besoin d'un username unique en interne
-    (changer AUTH_USER_MODEL en cours de route serait une opération très risquée
-    sur une base qui a déjà des migrations et des données réelles). On le dérive
-    donc automatiquement de l'email — l'utilisateur, lui, ne voit et ne saisit
-    plus jamais que son adresse email."""
-    base = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0].lower()) or 'user'
-    username = base
-    i = 1
-    while User.objects.filter(username=username).exists():
-        i += 1
-        username = f"{base}{i}"
-    return username
 
 
 class RegisterView(APIView):
@@ -109,6 +101,7 @@ class RegisterView(APIView):
                     username=username, password=password, email=email, is_active=False
                 )
                 Profile.objects.create(user=user, is_verified=False)
+                log_activity(user, 'REGISTER', description=email)
         except IntegrityError:
             # Filet de sécurité derrière le check ci-dessus : deux inscriptions
             # quasi simultanées avec le même email (ou une dérivation de
@@ -134,6 +127,21 @@ class RegisterView(APIView):
         return Response({
             'message': "Compte créé avec succès. Un email de confirmation vous a été envoyé.",
         }, status=201)
+
+
+class LoggingTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """SimpleJWT n'émet jamais django.contrib.auth.signals.user_logged_in pour
+    une connexion JWT (update_last_login, quand actif, est appelé en direct
+    dans validate() — pas via signal) : un receiver de signal ne se
+    déclencherait donc jamais ici. Il faut passer par le serializer."""
+    def validate(self, attrs):
+        data = super().validate(attrs)  # lève avant cette ligne si échec -> échecs de connexion non logués (voulu)
+        log_activity(self.user, 'LOGIN', description=self.user.email)
+        return data
+
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = LoggingTokenObtainPairSerializer
 
 
 class LogoutView(APIView):
@@ -223,6 +231,7 @@ class EmailVerifyConfirmView(APIView):
         if not user.is_active:
             user.is_active = True
             user.save(update_fields=['is_active'])
+            log_activity(user, 'ACCOUNT_ACTIVATED', description=f"{user.email} (lien email)")
 
         # Le compte vient d'être activé : on connecte directement l'utilisateur
         # (évite un aller-retour supplémentaire vers l'écran de login).
@@ -1564,3 +1573,253 @@ class NotificationsDashboardView(APIView):
                 len(renouvellements) + len(compartiments_vacants)
             ),
         })
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ADMINISTRATION (super admin uniquement — accès cross-tenant délibéré)
+# ═══════════════════════════════════════════════════════════════════
+# Tout le reste de cette API filtre STRICTEMENT par request.user. Les vues
+# ci-dessous sont la SEULE exception volontaire : elles voient les données de
+# TOUS les utilisateurs. IsAdminUser (= request.user.is_staff) est donc
+# systématique et non négociable sur chacune d'entre elles.
+
+class AdminStatsView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        today = date.today()
+        mois, annee = today.month, today.year
+        return Response({
+            'total_users':          User.objects.count(),
+            'active_users':         User.objects.filter(is_active=True).count(),
+            'verified_users':       Profile.objects.filter(is_verified=True).count(),
+            'total_logements':      Logement.objects.count(),
+            'total_occupants':      Occupant.objects.filter(actif=True).count(),
+            'total_paiements_mois': float(
+                Paiement.objects.filter(date_paiement__month=mois, date_paiement__year=annee)
+                .aggregate(t=Sum('montant_verse'))['t'] or 0
+            ),
+            'total_depenses_mois': float(
+                Depense.objects.filter(date__month=mois, date__year=annee)
+                .aggregate(t=Sum('montant'))['t'] or 0
+            ),
+        })
+
+
+class AdminUsersListView(generics.ListAPIView):
+    serializer_class    = AdminUserSerializer
+    permission_classes  = [IsAdminUser]
+    pagination_class    = StandardResultsSetPagination
+
+    def get_queryset(self):
+        qs = User.objects.select_related('profile').annotate(
+            nb_logements=Count('logements')
+        ).order_by('-date_joined')
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(email__icontains=search)
+        return qs
+
+
+class AdminUserToggleActiveView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        va_desactiver = target.is_active  # is_active==True -> ce post() va le faire passer à False
+
+        # Deux garde-fous : jamais désactiver un Super Admin, jamais se
+        # désactiver soi-même — SimpleJWT revalide is_active à CHAQUE requête
+        # (pas seulement à l'émission du token), donc une auto-désactivation
+        # verrouillerait l'admin hors de son propre compte instantanément.
+        if va_desactiver and target.is_superuser:
+            return Response({'error': 'Impossible de désactiver un compte Super Admin.'}, status=400)
+        if va_desactiver and target.id == request.user.id:
+            return Response({'error': 'Vous ne pouvez pas désactiver votre propre compte.'}, status=400)
+
+        target.is_active = not target.is_active
+        target.save(update_fields=['is_active'])
+        log_activity(
+            target, 'ACCOUNT_ACTIVATED' if target.is_active else 'ACCOUNT_DEACTIVATED',
+            description=f"{target.email} (par admin {request.user.email})"
+        )
+        qs = User.objects.select_related('profile').annotate(nb_logements=Count('logements')).get(pk=target.pk)
+        return Response(AdminUserSerializer(qs).data)
+
+
+class AdminUserResetPasswordView(APIView):
+    """Déclenche le MÊME flux que 'mot de passe oublié' — aucune nouvelle
+    logique d'email, juste initié par un admin plutôt que par l'utilisateur."""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, user_id):
+        target = get_object_or_404(User, id=user_id)
+        try:
+            envoyer_email_reset_password(target, make_password_reset_token(target))
+        except Exception as e:
+            logger.error("Échec de l'envoi de l'email de réinitialisation (admin) à %s : %s", target.email, e, exc_info=True)
+            return Response({'error': "Échec de l'envoi de l'email."}, status=500)
+        return Response({'message': f"Email de réinitialisation envoyé à {target.email}."})
+
+
+# ── Logements (admin) ─────────────────────────────
+
+class AdminLogementListCreateView(generics.ListCreateAPIView):
+    queryset           = Logement.objects.all().select_related('proprietaire').order_by('-date_creation')
+    serializer_class    = AdminLogementSerializer
+    permission_classes  = [IsAdminUser]
+    pagination_class    = StandardResultsSetPagination
+
+
+class AdminLogementDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset           = Logement.objects.all()
+    serializer_class    = AdminLogementSerializer
+    permission_classes  = [IsAdminUser]
+
+
+class AdminCompartimentsByLogementView(generics.ListAPIView):
+    """Équivalent cross-tenant de CompartimentsByLogementView — nécessaire
+    pour le sélecteur en cascade propriétaire→logement→compartiment du
+    formulaire Occupant admin (l'admin n'est jamais propriétaire du logement
+    qu'il consulte, donc la vue "tenant" filtrée par request.user 404 systématiquement)."""
+    serializer_class   = CompartimentSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        return Compartiment.objects.filter(logement_id=self.kwargs['logement_id'])
+
+
+# ── Occupants (admin) ─────────────────────────────
+# PAS de generics DRF ici, volontairement : logement est TOUJOURS dérivé de
+# compartiment côté serveur, jamais accepté tel quel du client — sinon un
+# admin pourrait combiner, via deux champs indépendants, un logement et un
+# compartiment appartenant à deux propriétaires différents (rien dans
+# OccupantSerializer.validate() ne détecte cette incohérence).
+
+class AdminOccupantListCreateView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        qs = Occupant.objects.filter(actif=True).select_related(
+            'compartiment', 'logement', 'proprietaire'
+        ).order_by('-date_creation')
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(qs, request)
+        return paginator.get_paginated_response(OccupantSerializer(page, many=True).data)
+
+    def post(self, request):
+        data = request.data.copy()
+        compartiment_id = data.get('compartiment')
+        if not compartiment_id:
+            return Response({'compartiment': ['Ce champ est requis.']}, status=400)
+        compartiment = get_object_or_404(Compartiment, id=compartiment_id)
+        data['logement'] = compartiment.logement_id
+
+        s = OccupantSerializer(data=data)
+        if s.is_valid():
+            occupant = s.save()
+            return Response(OccupantSerializer(occupant).data, status=201)
+        return Response(s.errors, status=400)
+
+
+class AdminOccupantDetailView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, occupant_id):
+        return Response(OccupantSerializer(get_object_or_404(Occupant, id=occupant_id)).data)
+
+    def put(self, request, occupant_id):
+        occupant = get_object_or_404(Occupant, id=occupant_id)
+        data = request.data.copy()
+        compartiment_id = data.get('compartiment', occupant.compartiment_id)
+        if compartiment_id:
+            compartiment = get_object_or_404(Compartiment, id=compartiment_id)
+            data['logement'] = compartiment.logement_id
+        s = OccupantSerializer(occupant, data=data, partial=True)
+        if s.is_valid():
+            s.save()
+            return Response(s.data)
+        return Response(s.errors, status=400)
+
+    def delete(self, request, occupant_id):
+        get_object_or_404(Occupant, id=occupant_id).delete()
+        return Response(status=204)
+
+
+# ── Paiements (admin) ─────────────────────────────
+
+class AdminPaiementListCreateView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        qs = Paiement.objects.all().select_related('occupant').order_by('-date_paiement')
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(qs, request)
+        return paginator.get_paginated_response(PaiementSerializer(page, many=True).data)
+
+    def post(self, request):
+        s = PaiementSerializer(data=request.data)
+        if s.is_valid():
+            s.save()
+            return Response(s.data, status=201)
+        return Response(s.errors, status=400)
+
+
+class AdminPaiementDetailView(APIView):
+    """Volontairement PAS de PUT — même limitation que PaiementDetailView
+    "tenant" : Paiement.save() recalcule sans condition date_prochain_paiement
+    et statut de l'occupant à partir de LA PÉRIODE DE CE PAIEMENT PRÉCIS ;
+    éditer un ancien encaissement écraserait silencieusement une échéance
+    calculée depuis des paiements plus récents."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, paiement_id):
+        return Response(PaiementSerializer(get_object_or_404(Paiement, id=paiement_id)).data)
+
+    def delete(self, request, paiement_id):
+        get_object_or_404(Paiement, id=paiement_id).delete()
+        return Response(status=204)
+
+
+# ── Dépenses (admin) ──────────────────────────────
+
+class AdminDepenseListCreateView(generics.ListCreateAPIView):
+    queryset           = Depense.objects.all().select_related('logement').order_by('-date')
+    serializer_class    = DepenseSerializer
+    permission_classes  = [IsAdminUser]
+    pagination_class    = StandardResultsSetPagination
+
+
+class AdminDepenseDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset           = Depense.objects.all()
+    serializer_class    = DepenseSerializer
+    permission_classes  = [IsAdminUser]
+
+
+# ── États des lieux (admin) ───────────────────────
+
+class AdminEtatDesLieuxListCreateView(generics.ListCreateAPIView):
+    queryset           = EtatDesLieux.objects.all().select_related('occupant', 'logement', 'compartiment').order_by('-date_realisation')
+    serializer_class    = EtatDesLieuxSerializer
+    permission_classes  = [IsAdminUser]
+    pagination_class    = StandardResultsSetPagination
+    # Piège à ne pas réintroduire : ne JAMAIS surcharger perform_create() pour
+    # passer proprietaire=request.user ici (contrairement à la vue "tenant").
+    # EtatDesLieux.save() dérive déjà proprietaire/logement/compartiment
+    # depuis occupant tout seul — le faire ici réassignerait le document à
+    # l'admin au lieu du vrai bailleur.
+
+
+class AdminEtatDesLieuxDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset           = EtatDesLieux.objects.all()
+    serializer_class    = EtatDesLieuxSerializer
+    permission_classes  = [IsAdminUser]
+
+
+# ── Journal d'activité (admin) ────────────────────
+
+class AdminActivityLogListView(generics.ListAPIView):
+    queryset           = ActivityLog.objects.all().select_related('user')
+    serializer_class    = ActivityLogSerializer
+    permission_classes  = [IsAdminUser]
+    pagination_class    = StandardResultsSetPagination

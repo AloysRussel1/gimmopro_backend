@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from datetime import timedelta
+from django.contrib.auth.models import User
 from .models import (
     Logement, Compartiment, Occupant, Paiement, HistoriqueOccupation, Profile, Depense,
-    Document, EtatDesLieux,
+    Document, EtatDesLieux, ActivityLog,
 )
 from .utils import make_recu_token
 
@@ -16,17 +17,50 @@ class DepenseSerializer(serializers.ModelSerializer):
 
 
 class ProfileSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(source='user.username', read_only=True)
-    email    = serializers.EmailField(source='user.email', read_only=True)
-    nom      = serializers.SerializerMethodField()
+    username     = serializers.CharField(source='user.username', read_only=True)
+    email        = serializers.EmailField(source='user.email', read_only=True)
+    nom          = serializers.SerializerMethodField()
+    # Utilisé côté frontend uniquement pour l'affichage/la navigation (AdminRoute) —
+    # la vraie protection des endpoints admin est IsAdminUser côté backend.
+    is_staff     = serializers.BooleanField(source='user.is_staff', read_only=True)
+    is_superuser = serializers.BooleanField(source='user.is_superuser', read_only=True)
 
     class Meta:
         model  = Profile
-        fields = ['username', 'email', 'nom', 'telephone', 'adresse', 'is_verified']
+        fields = ['username', 'email', 'nom', 'telephone', 'adresse', 'is_verified', 'is_staff', 'is_superuser']
         read_only_fields = ['is_verified']
 
     def get_nom(self, obj):
         return obj.user.get_full_name() or obj.user.username
+
+
+class AdminUserSerializer(serializers.ModelSerializer):
+    """Vue d'ensemble admin d'un compte — jamais utilisé hors des vues
+    IsAdminUser. is_verified passe par un SerializerMethodField (pas un
+    source dotted) pour ne pas planter si un compte très ancien n'a pas
+    encore de Profile."""
+    is_verified  = serializers.SerializerMethodField()
+    nb_logements = serializers.IntegerField(read_only=True, default=0)  # annotate côté vue
+
+    class Meta:
+        model  = User
+        fields = ['id', 'username', 'email', 'is_active', 'is_staff', 'is_superuser',
+                  'date_joined', 'is_verified', 'nb_logements']
+        read_only_fields = fields
+
+    def get_is_verified(self, obj):
+        return getattr(getattr(obj, 'profile', None), 'is_verified', False)
+
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    user_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = ActivityLog
+        fields = ['id', 'user', 'user_email', 'action', 'description', 'date_creation']
+
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user_id else None
 
 
 class LogementSerializer(serializers.ModelSerializer):
@@ -38,6 +72,18 @@ class LogementSerializer(serializers.ModelSerializer):
         model  = Logement
         fields = ['id', 'nom', 'localisation', 'description',
                   'nb_compartiments', 'nb_occupes', 'nb_libres']
+
+
+class AdminLogementSerializer(LogementSerializer):
+    """Réservée aux vues admin (cross-tenant) — seule différence avec
+    LogementSerializer : proprietaire devient un champ écrivable, puisque
+    la vue "tenant" normale le fixe elle-même via s.save(proprietaire=request.user)
+    et n'a donc jamais eu besoin de l'exposer."""
+    proprietaire       = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    proprietaire_email = serializers.CharField(source='proprietaire.email', read_only=True)
+
+    class Meta(LogementSerializer.Meta):
+        fields = LogementSerializer.Meta.fields + ['proprietaire', 'proprietaire_email']
 
 
 class OccupantMiniSerializer(serializers.ModelSerializer):

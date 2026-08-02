@@ -1,8 +1,37 @@
 """Utilitaires de formatage pour les documents PDF (contrats, reçus)
 et de cloisonnement multi-utilisateur (chaque requête n'accède qu'à
 ses propres données)."""
+import re
 from django.core import signing
 from django.shortcuts import get_object_or_404
+
+
+def _generer_username_depuis_email(email):
+    """Django's built-in User a toujours besoin d'un username unique en interne
+    (changer AUTH_USER_MODEL en cours de route serait une opération très risquée
+    sur une base qui a déjà des migrations et des données réelles). On le dérive
+    donc automatiquement de l'email — l'utilisateur, lui, ne voit et ne saisit
+    plus jamais que son adresse email. Partagé par RegisterView et la commande
+    create_admin_account."""
+    from django.contrib.auth.models import User
+    base = re.sub(r'[^a-zA-Z0-9_]', '', email.split('@')[0].lower()) or 'user'
+    username = base
+    i = 1
+    while User.objects.filter(username=username).exists():
+        i += 1
+        username = f"{base}{i}"
+    return username
+
+
+def log_activity(user, action, description=''):
+    """Journal des actions clés (inscription, connexion, activation/
+    désactivation de compte) — jamais bloquant : une erreur ici ne doit
+    jamais faire échouer l'action métier qu'elle enregistre."""
+    from .models import ActivityLog
+    try:
+        ActivityLog.objects.create(user=user, action=action, description=description)
+    except Exception:
+        pass
 
 
 # ── Cloisonnement multi-tenant ──────────────────────────────────────

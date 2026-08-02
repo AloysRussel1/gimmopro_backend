@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
 from app.models import Profile
+from app.utils import log_activity
 
 
 class Command(BaseCommand):
@@ -40,6 +41,8 @@ class Command(BaseCommand):
         if not profile.is_verified:
             profile.is_verified = True
             profile.save(update_fields=['is_verified'])
+
+        log_activity(user, 'ACCOUNT_ACTIVATED', description=f"{email} (commande activate_user)")
 
         self.stdout.write(self.style.SUCCESS(
             f"{email} (username={user.username}) activé avec succès. Connexion possible dès maintenant."
