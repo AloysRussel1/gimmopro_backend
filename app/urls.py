@@ -8,9 +8,16 @@ urlpatterns = [
     path('auth/login/',    TokenObtainPairView.as_view(),   name='token_obtain_pair'),
     path('auth/refresh/',  TokenRefreshView.as_view(),      name='token_refresh'),
     path('auth/logout/',   views.LogoutView.as_view(),      name='logout'),
+    path('auth/password-reset/',         views.PasswordResetRequestView.as_view(), name='password-reset-request'),
+    path('auth/password-reset/confirm/', views.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
+    path('auth/verify-email/',           views.EmailVerifyRequestView.as_view(),   name='verify-email-request'),
+    path('auth/verify-email/confirm/',   views.EmailVerifyConfirmView.as_view(),   name='verify-email-confirm'),
 
     # Dashboard
     path('dashboard/stats/', views.DashboardStatsView.as_view(), name='dashboard-stats'),
+
+    # Profil bailleur
+    path('profil/', views.ProfileView.as_view(), name='profile'),
 
     # Rapport mensuel PDF
     path('rapports/mensuel/', views.RapportMensuelPDFView.as_view(), name='rapport-mensuel'),
@@ -35,4 +42,26 @@ urlpatterns = [
     path('paiements/',                        views.PaiementListCreateView.as_view(), name='paiement-list-create'),
     path('paiements/<int:paiement_id>/',      views.PaiementDetailView.as_view(),     name='paiement-detail'),
     path('paiements/<int:paiement_id>/recu/', views.RecuPaiementPDFView.as_view(),    name='paiement-recu'),
+
+    # Reçu public — la racine sert la page HTML (aperçu WhatsApp/OG), pas le PDF directement.
+    path('paiements/<int:paiement_id>/recu/public/<str:token>/',               views.RecuPublicLandingView.as_view(),   name='paiement-recu-public'),
+    path('paiements/<int:paiement_id>/recu/public/<str:token>/telecharger/',   views.RecuPaiementPublicPDFView.as_view(), name='paiement-recu-public-download'),
+    path('paiements/<int:paiement_id>/recu/public/<str:token>/image.png',      views.RecuPublicImageView.as_view(),     name='paiement-recu-public-image'),
+
+    # Dépenses / charges
+    path('depenses/',                  views.DepenseListCreateView.as_view(), name='depense-list-create'),
+    path('depenses/<int:depense_id>/', views.DepenseDetailView.as_view(),     name='depense-detail'),
+
+    # Documents / pièces jointes
+    path('documents/',                            views.DocumentListCreateView.as_view(), name='document-list-create'),
+    path('documents/<int:document_id>/',          views.DocumentDetailView.as_view(),     name='document-detail'),
+    path('documents/<int:document_id>/fichier/',  views.DocumentDownloadView.as_view(),   name='document-download'),
+
+    # État des lieux
+    path('etat-des-lieux/',              views.EtatDesLieuxListCreateView.as_view(), name='edl-list-create'),
+    path('etat-des-lieux/<int:edl_id>/', views.EtatDesLieuxDetailView.as_view(),     name='edl-detail'),
+    path('etat-des-lieux/<int:edl_id>/pdf/', views.EtatDesLieuxPDFView.as_view(),    name='edl-pdf'),
+
+    # Notifications / rappels d'échéances
+    path('notifications/dashboard/', views.NotificationsDashboardView.as_view(), name='notifications-dashboard'),
 ]

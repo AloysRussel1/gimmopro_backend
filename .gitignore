@@ -1,0 +1,28 @@
+# Environnements virtuels
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Base de données locale (on passe à PostgreSQL — ne doit plus jamais être committée)
+db.sqlite3
+db.sqlite3-journal
+
+# Secrets / config locale
+.env
+.env.*
+!.env.example
+
+# Django
+staticfiles/
+media/
+mediafiles/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.DS_Store

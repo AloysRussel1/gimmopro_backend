@@ -1,6 +1,32 @@
 from rest_framework import serializers
 from datetime import timedelta
-from .models import Logement, Compartiment, Occupant, Paiement, HistoriqueOccupation
+from .models import (
+    Logement, Compartiment, Occupant, Paiement, HistoriqueOccupation, Profile, Depense,
+    Document, EtatDesLieux,
+)
+from .utils import make_recu_token
+
+
+class DepenseSerializer(serializers.ModelSerializer):
+    logement_nom = serializers.CharField(source='logement.nom', read_only=True)
+
+    class Meta:
+        model  = Depense
+        fields = ['id', 'logement', 'logement_nom', 'libelle', 'montant', 'date', 'categorie', 'note']
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email    = serializers.EmailField(source='user.email', read_only=True)
+    nom      = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Profile
+        fields = ['username', 'email', 'nom', 'telephone', 'adresse', 'is_verified']
+        read_only_fields = ['is_verified']
+
+    def get_nom(self, obj):
+        return obj.user.get_full_name() or obj.user.username
 
 
 class LogementSerializer(serializers.ModelSerializer):
@@ -28,6 +54,7 @@ class CompartimentSerializer(serializers.ModelSerializer):
         model  = Compartiment
         fields = ['id', 'logement', 'type', 'nom', 'statut',
                   'chambres', 'salons', 'douches', 'cuisines',
+                  'loyer_reference', 'mezzanine',
                   'occupant_actuel']
 
 
@@ -49,7 +76,7 @@ class OccupantSerializer(serializers.ModelSerializer):
         model  = Occupant
         fields = [
             'id', 'nom_complet', 'email', 'telephone', 'cni',
-            'numero_contrat', 'date_debut_contrat', 'loyer',
+            'numero_contrat', 'date_debut_contrat', 'date_fin_contrat', 'loyer', 'caution_versee',
             'date_prochain_paiement', 'statut', 'actif',
             'compartiment', 'compartiment_nom',
             'logement', 'logement_nom', 'logement_loc',
@@ -68,18 +95,25 @@ class OccupantSerializer(serializers.ModelSerializer):
 
 
 class PaiementSerializer(serializers.ModelSerializer):
-    occupant_nom     = serializers.CharField(source='occupant.nom_complet',      read_only=True)
-    compartiment_nom = serializers.CharField(source='occupant.compartiment.nom', read_only=True)
+    occupant_nom       = serializers.CharField(source='occupant.nom_complet',      read_only=True)
+    occupant_telephone = serializers.CharField(source='occupant.telephone',        read_only=True)
+    occupant_email     = serializers.CharField(source='occupant.email',            read_only=True)
+    compartiment_nom   = serializers.CharField(source='occupant.compartiment.nom', read_only=True)
+    recu_token         = serializers.SerializerMethodField()
 
     class Meta:
         model  = Paiement
         fields = [
-            'id', 'occupant', 'occupant_nom', 'compartiment_nom',
-            'montant_verse', 'nombre_mois',
+            'id', 'occupant', 'occupant_nom', 'occupant_telephone', 'occupant_email',
+            'compartiment_nom',
+            'montant_verse', 'nombre_mois', 'mode_paiement',
             'date_paiement', 'date_debut_periode', 'date_fin_periode',
-            'statut', 'note',
+            'statut', 'note', 'recu_token',
         ]
         read_only_fields = ['statut', 'date_fin_periode']
+
+    def get_recu_token(self, obj):
+        return make_recu_token(obj.id)
 
     def validate(self, data):
         if 'date_debut_periode' in data and 'nombre_mois' in data:
@@ -88,3 +122,62 @@ class PaiementSerializer(serializers.ModelSerializer):
             nb    = data['nombre_mois']
             data['date_fin_periode'] = debut + relativedelta(months=nb) - timedelta(days=1)
         return data
+
+
+class DocumentSerializer(serializers.ModelSerializer):
+    # Le fichier n'est jamais renvoyé en lecture (pas d'URL brute exposée) —
+    # le téléchargement passe exclusivement par DocumentDownloadView, qui
+    # revérifie la propriété avant de streamer les octets.
+    occupant_nom           = serializers.SerializerMethodField()
+    logement_nom           = serializers.SerializerMethodField()
+    type_document_display  = serializers.CharField(source='get_type_document_display', read_only=True)
+
+    class Meta:
+        model  = Document
+        fields = [
+            'id', 'occupant', 'occupant_nom', 'logement', 'logement_nom',
+            'type_document', 'type_document_display',
+            'fichier', 'nom_fichier', 'taille_octets', 'date_televersement',
+        ]
+        read_only_fields = ['nom_fichier', 'taille_octets', 'date_televersement']
+        extra_kwargs = {'fichier': {'write_only': True}}
+
+    def get_occupant_nom(self, obj):
+        return obj.occupant.nom_complet if obj.occupant_id else None
+
+    def get_logement_nom(self, obj):
+        return obj.logement.nom if obj.logement_id else None
+
+    def validate(self, data):
+        occupant = data.get('occupant', getattr(self.instance, 'occupant', None))
+        logement = data.get('logement', getattr(self.instance, 'logement', None))
+        if not occupant and not logement:
+            raise serializers.ValidationError(
+                "Un document doit être rattaché à un locataire ou à un logement."
+            )
+        return data
+
+
+class EtatDesLieuxSerializer(serializers.ModelSerializer):
+    occupant_nom     = serializers.CharField(source='occupant.nom_complet', read_only=True)
+    logement_nom     = serializers.SerializerMethodField()
+    compartiment_nom = serializers.SerializerMethodField()
+    type_display     = serializers.CharField(source='get_type_display', read_only=True)
+
+    class Meta:
+        model  = EtatDesLieux
+        fields = [
+            'id', 'occupant', 'occupant_nom',
+            'logement', 'logement_nom', 'compartiment', 'compartiment_nom',
+            'type', 'type_display', 'date_realisation', 'etat_general',
+            'cles_remises', 'observations', 'champs_details', 'date_creation',
+        ]
+        # logement/compartiment sont auto-dérivés de l'occupant dans
+        # EtatDesLieux.save() — jamais fournis par le client.
+        read_only_fields = ['logement', 'compartiment', 'date_creation']
+
+    def get_logement_nom(self, obj):
+        return obj.logement.nom if obj.logement_id else None
+
+    def get_compartiment_nom(self, obj):
+        return obj.compartiment.nom if obj.compartiment_id else None

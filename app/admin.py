@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Logement, Compartiment, Occupant, Paiement
+from .models import Logement, Compartiment, Occupant, Paiement, Depense
 
 
 @admin.register(Logement)
@@ -26,3 +26,10 @@ class OccupantAdmin(admin.ModelAdmin):
 class PaiementAdmin(admin.ModelAdmin):
     list_display = ['id', 'occupant', 'montant_verse', 'nombre_mois', 'date_paiement', 'date_fin_periode', 'statut']
     list_filter  = ['statut']
+
+
+@admin.register(Depense)
+class DepenseAdmin(admin.ModelAdmin):
+    list_display  = ['id', 'libelle', 'logement', 'montant', 'categorie', 'date']
+    list_filter   = ['categorie']
+    search_fields = ['libelle']

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Reçu de paiement — {{ montant_txt }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gimmopro">
+<meta property="og:title" content="Reçu de paiement — {{ montant_txt }}">
+<meta property="og:description" content="Loyer de {{ periode_txt }} — {{ immeuble }}. Statut : PAYÉ.">
+<meta property="og:image" content="{{ image_url }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="{{ page_url }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Reçu de paiement — {{ montant_txt }}">
+<meta name="twitter:description" content="Loyer de {{ periode_txt }} — {{ immeuble }}. Statut : PAYÉ.">
+<meta name="twitter:image" content="{{ image_url }}">
+
+<style>
+  :root {
+    --bg: #F8FAFC; --surface: #FFFFFF; --border: #E2E8F0;
+    --text: #0F172A; --text-2: #64748B; --text-3: #94A3B8;
+    --accent: #4F46E5; --success: #16A34A; --success-dim: #DCFCE7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px; background: var(--bg);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 20px;
+    padding: 32px 24px; box-shadow: 0 1px 3px rgba(15,23,42,.06);
+    text-align: center;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--success-dim); color: var(--success);
+    font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    padding: 6px 16px; border-radius: 100px; margin-bottom: 18px;
+  }
+  .label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin: 0 0 6px; }
+  .montant { font-size: 34px; font-weight: 700; color: var(--text); margin: 0 0 4px; }
+  .periode { font-size: 14px; color: var(--text-2); margin: 0 0 26px; }
+  .rows { text-align: left; border-top: 1px solid var(--border); padding-top: 18px; margin-bottom: 26px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: 13.5px; }
+  .row span:first-child { color: var(--text-3); }
+  .row span:last-child { color: var(--text); font-weight: 600; text-align: right; }
+  .btn {
+    display: block; width: 100%; background: var(--accent); color: #fff;
+    text-decoration: none; font-size: 15px; font-weight: 700;
+    padding: 14px; border-radius: 10px; margin-bottom: 16px;
+  }
+  .footer { font-size: 11.5px; color: var(--text-3); margin: 0; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">✓ PAYÉ</div>
+    <p class="label">Reçu de paiement</p>
+    <p class="montant">{{ montant_txt }}</p>
+    <p class="periode">Loyer de {{ periode_txt }}</p>
+
+    <div class="rows">
+      <div class="row"><span>Locataire</span><span>{{ occupant_nom }}</span></div>
+      <div class="row"><span>Logement</span><span>{{ immeuble }}</span></div>
+      {% if compartiment_nom %}<div class="row"><span>Compartiment</span><span>{{ compartiment_nom }}</span></div>{% endif %}
+      <div class="row"><span>Mode de paiement</span><span>{{ mode_paiement }}</span></div>
+      <div class="row"><span>Bailleur</span><span>{{ bailleur_nom }}</span></div>
+    </div>
+
+    <a class="btn" href="{{ download_url }}">📥 Télécharger la quittance en PDF</a>
+    <p class="footer">Gimmopro — document généré électroniquement</p>
+  </div>
+</body>
+</html>

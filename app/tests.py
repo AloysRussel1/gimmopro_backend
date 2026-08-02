@@ -12,30 +12,30 @@ from .models import Logement, Compartiment, Occupant, Paiement
 # ─────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────
+# Alignés sur le schéma actuel (post-retrofit multi-tenant) :
+#  - Logement/Occupant sont rattachés à un `proprietaire` (User) — les vues
+#    filtrent STRICTEMENT par request.user, donc tout objet créé hors API
+#    doit avoir le bon propriétaire pour être visible dans les tests API.
+#  - Compartiment n'a PAS de champ `occupant` : le lien se fait dans l'autre
+#    sens, via Occupant.compartiment.
+#  - Paiement n'a PAS de champ `date_prochain_paiement` (ça, c'est un champ
+#    d'Occupant) : Paiement a `date_debut_periode`/`date_fin_periode`, et
+#    c'est LUI qui met à jour `Occupant.date_prochain_paiement` dans son
+#    save().
 
-def create_logement(nom="Résidence Test", localisation="Montréal", description="Test"):
-    return Logement.objects.create(nom=nom, localisation=localisation, description=description)
+def create_user(username="owner", email=None, password="test123"):
+    return User.objects.create_user(username=username, password=password, email=email or f"{username}@mail.com")
 
 
-def create_occupant(logement, suffix="1"):
-    return Occupant.objects.create(
-        logement=logement,
-        email=f"test{suffix}@mail.com",
-        telephone="0600000000",
-        cni=f"CNI{suffix}",
-        nom_complet=f"Locataire {suffix}",
-        numero_contrat=f"CONT{suffix}",
-        date_debut_contrat=date.today(),
-        loyer=Decimal("500.00"),
-        date_prochain_paiement=date.today() + timedelta(days=30),
-        statut="Actif",
+def create_logement(proprietaire, nom="Résidence Test", localisation="Montréal", description="Test"):
+    return Logement.objects.create(
+        proprietaire=proprietaire, nom=nom, localisation=localisation, description=description
     )
 
 
-def create_compartiment(logement, occupant=None, nom="Studio 1", type="STUDIO", statut="LIBRE"):
+def create_compartiment(logement, nom="Studio 1", type="STUDIO", statut="LIBRE"):
     return Compartiment.objects.create(
         logement=logement,
-        occupant=occupant,
         nom=nom,
         type=type,
         statut=statut,
@@ -46,12 +46,30 @@ def create_compartiment(logement, occupant=None, nom="Studio 1", type="STUDIO", 
     )
 
 
-def create_paiement(occupant):
+def create_occupant(logement, suffix="1", compartiment=None):
+    return Occupant.objects.create(
+        logement=logement,
+        compartiment=compartiment,
+        email=f"test{suffix}@mail.com",
+        telephone="0600000000",
+        cni=f"CNI{suffix}",
+        nom_complet=f"Locataire {suffix}",
+        date_debut_contrat=date.today(),
+        loyer=Decimal("500.00"),
+        date_prochain_paiement=date.today() + timedelta(days=30),
+        statut="Actif",
+    )
+
+
+def create_paiement(occupant, montant=Decimal("500.00")):
+    debut = date.today()
     return Paiement.objects.create(
         occupant=occupant,
-        montant_verse=Decimal("500.00"),
+        montant_verse=montant,
+        nombre_mois=1,
         date_paiement=date.today(),
-        date_prochain_paiement=date.today() + timedelta(days=30),
+        date_debut_periode=debut,
+        date_fin_periode=debut + timedelta(days=29),
         statut="Payé",
     )
 
@@ -61,20 +79,24 @@ def create_paiement(occupant):
 # ─────────────────────────────────────────
 
 class LogementModelTest(TestCase):
+    def setUp(self):
+        self.user = create_user("logement_owner")
+
     def test_creation_logement(self):
-        logement = create_logement()
+        logement = create_logement(self.user)
         self.assertEqual(str(logement), "Résidence Test")
         self.assertEqual(Logement.objects.count(), 1)
 
     def test_logement_nom_unique(self):
-        create_logement()
+        create_logement(self.user)
         with self.assertRaises(Exception):
-            create_logement()  # même nom → doit échouer
+            create_logement(self.user)  # même propriétaire + même nom → doit échouer
 
 
 class OccupantModelTest(TestCase):
     def setUp(self):
-        self.logement = create_logement()
+        self.user = create_user("occupant_owner")
+        self.logement = create_logement(self.user)
 
     def test_creation_occupant(self):
         occupant = create_occupant(self.logement)
@@ -89,7 +111,6 @@ class OccupantModelTest(TestCase):
             telephone="0600000001",
             cni="CNI_RETARD",
             nom_complet="Locataire Retard",
-            numero_contrat="CONT_RETARD",
             date_debut_contrat=date.today() - timedelta(days=60),
             loyer=Decimal("400.00"),
             date_prochain_paiement=date.today() - timedelta(days=10),
@@ -104,7 +125,8 @@ class OccupantModelTest(TestCase):
 
 class CompartimentModelTest(TestCase):
     def setUp(self):
-        self.logement = create_logement()
+        self.user = create_user("compartiment_owner")
+        self.logement = create_logement(self.user)
 
     def test_creation_compartiment(self):
         comp = create_compartiment(self.logement)
@@ -120,10 +142,21 @@ class CompartimentModelTest(TestCase):
         self.logement.delete()
         self.assertEqual(Compartiment.objects.count(), 0)
 
+    def test_occupant_actuel_reflete_occupation(self):
+        """Compartiment n'a pas de champ `occupant` : le lien passe par
+        Occupant.compartiment, et occupant_actuel doit le refléter."""
+        comp = create_compartiment(self.logement)
+        self.assertIsNone(comp.occupant_actuel)
+        occupant = create_occupant(self.logement, compartiment=comp)
+        comp.refresh_from_db()
+        self.assertEqual(comp.statut, "OCCUPE")
+        self.assertEqual(comp.occupant_actuel, occupant)
+
 
 class PaiementModelTest(TestCase):
     def setUp(self):
-        self.logement = create_logement()
+        self.user = create_user("paiement_owner")
+        self.logement = create_logement(self.user)
         self.occupant = create_occupant(self.logement)
 
     def test_creation_paiement(self):
@@ -134,6 +167,13 @@ class PaiementModelTest(TestCase):
     def test_paiement_str(self):
         paiement = create_paiement(self.occupant)
         self.assertIn("500", str(paiement))
+
+    def test_paiement_avance_date_prochain_paiement(self):
+        """C'est Paiement.save() qui met à jour Occupant.date_prochain_paiement
+        (et non l'inverse) — Paiement lui-même n'a pas ce champ."""
+        create_paiement(self.occupant)
+        self.occupant.refresh_from_db()
+        self.assertEqual(self.occupant.date_prochain_paiement, date.today() + timedelta(days=30))
 
 
 # ─────────────────────────────────────────
@@ -149,17 +189,16 @@ class AuthTest(APITestCase):
 
     def test_register_success(self):
         res = self.client.post(self.register_url, {
-            "username": "aloys",
-            "password": "motdepasse123",
             "email": "aloys@mail.com",
+            "password": "motdepasse123",
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertIn("access", res.data)
 
-    def test_register_username_deja_pris(self):
-        User.objects.create_user(username="aloys", password="test123")
+    def test_register_email_deja_pris(self):
+        User.objects.create_user(username="aloys", password="test123", email="aloys@mail.com")
         res = self.client.post(self.register_url, {
-            "username": "aloys",
+            "email": "aloys@mail.com",
             "password": "motdepasse123",
         })
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
@@ -219,20 +258,20 @@ class LogementAPITest(AuthenticatedAPITest):
         self.assertEqual(res.data["nom"], "Villa Rosa")
 
     def test_lister_logements(self):
-        create_logement("Log A")
-        create_logement("Log B")
+        create_logement(self.user, "Log A")
+        create_logement(self.user, "Log B")
         res = self.client.get(reverse("logement-list-create"))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(len(res.data), 2)
 
     def test_detail_logement(self):
-        logement = create_logement()
+        logement = create_logement(self.user)
         res = self.client.get(reverse("logement-detail", args=[logement.id]))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["nom"], logement.nom)
 
     def test_modifier_logement(self):
-        logement = create_logement()
+        logement = create_logement(self.user)
         res = self.client.put(reverse("logement-detail", args=[logement.id]), {
             "nom": "Nouveau Nom",
             "localisation": "Québec",
@@ -241,10 +280,18 @@ class LogementAPITest(AuthenticatedAPITest):
         self.assertEqual(res.data["nom"], "Nouveau Nom")
 
     def test_supprimer_logement(self):
-        logement = create_logement()
+        logement = create_logement(self.user)
         res = self.client.delete(reverse("logement-detail", args=[logement.id]))
         self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(Logement.objects.count(), 0)
+
+    def test_isolation_multi_tenant(self):
+        """Un utilisateur ne doit jamais voir les logements d'un autre."""
+        autre = create_user("autre_bailleur")
+        create_logement(autre, "Logement d'autrui")
+        res = self.client.get(reverse("logement-list-create"))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 0)
 
 
 # ─────────────────────────────────────────
@@ -254,7 +301,7 @@ class LogementAPITest(AuthenticatedAPITest):
 class CompartimentAPITest(AuthenticatedAPITest):
     def setUp(self):
         super().setUp()
-        self.logement = create_logement()
+        self.logement = create_logement(self.user)
 
     def test_ajouter_compartiment(self):
         res = self.client.post(
@@ -297,7 +344,7 @@ class CompartimentAPITest(AuthenticatedAPITest):
 class OccupantAPITest(AuthenticatedAPITest):
     def setUp(self):
         super().setUp()
-        self.logement = create_logement()
+        self.logement = create_logement(self.user)
 
     def test_creer_occupant(self):
         res = self.client.post(reverse("occupant-list-create"), {
@@ -306,7 +353,6 @@ class OccupantAPITest(AuthenticatedAPITest):
             "telephone": "0600000099",
             "cni": "CNI999",
             "nom_complet": "Jean Dupont",
-            "numero_contrat": "CONT999",
             "date_debut_contrat": str(date.today()),
             "loyer": "600.00",
             "date_prochain_paiement": str(date.today() + timedelta(days=30)),
@@ -334,15 +380,16 @@ class OccupantAPITest(AuthenticatedAPITest):
 class PaiementAPITest(AuthenticatedAPITest):
     def setUp(self):
         super().setUp()
-        self.logement = create_logement()
+        self.logement = create_logement(self.user)
         self.occupant = create_occupant(self.logement)
 
     def test_creer_paiement(self):
         res = self.client.post(reverse("paiement-list-create"), {
             "occupant": self.occupant.id,
             "montant_verse": "500.00",
+            "nombre_mois": 1,
             "date_paiement": str(date.today()),
-            "date_prochain_paiement": str(date.today() + timedelta(days=30)),
+            "date_debut_periode": str(date.today()),
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
 
@@ -367,9 +414,12 @@ class PaiementAPITest(AuthenticatedAPITest):
 
 class DashboardStatsTest(AuthenticatedAPITest):
     def test_stats_dashboard(self):
-        logement = create_logement()
-        occupant = create_occupant(logement)
-        create_compartiment(logement, occupant=occupant, statut="OCCUPE")
+        logement = create_logement(self.user)
+        comp = create_compartiment(logement)
+        # Compartiment n'a pas de champ `occupant` : c'est le fait de créer un
+        # Occupant actif rattaché à ce compartiment qui bascule automatiquement
+        # son statut à OCCUPE (voir Occupant.save()).
+        occupant = create_occupant(logement, compartiment=comp)
         create_paiement(occupant)
 
         res = self.client.get(reverse("dashboard-stats"))
