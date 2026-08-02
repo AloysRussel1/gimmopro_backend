@@ -147,7 +147,13 @@ EMAIL_HOST          = os.environ.get('EMAIL_HOST', '')
 EMAIL_PORT          = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-EMAIL_USE_TLS       = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+# 587 = STARTTLS (EMAIL_USE_TLS) ; 465 = SSL implicite (EMAIL_USE_SSL) — les
+# deux sont mutuellement exclusifs pour smtplib/Django, jamais True en même
+# temps. Ce projet n'exposait jusqu'ici que EMAIL_USE_TLS : impossible de
+# configurer correctement un fournisseur en port 465 (ex: certains comptes
+# Gmail/Outlook) sans EMAIL_USE_SSL.
+EMAIL_USE_TLS       = os.environ.get('EMAIL_USE_TLS', 'True' if EMAIL_PORT != 465 else 'False') == 'True'
+EMAIL_USE_SSL       = os.environ.get('EMAIL_USE_SSL', 'True' if EMAIL_PORT == 465 else 'False') == 'True'
 # Beaucoup de fournisseurs SMTP (Gmail compris) rejettent silencieusement
 # l'envoi si l'en-tête From: ne correspond pas au compte authentifié — sans
 # DEFAULT_FROM_EMAIL explicite, on retombe donc sur EMAIL_HOST_USER (le
@@ -159,6 +165,19 @@ DEFAULT_FROM_EMAIL  = os.environ.get('DEFAULT_FROM_EMAIL') or EMAIL_HOST_USER or
 # jusqu'à ce que gunicorn tue le worker de force (aucune exception Python
 # propre, donc rien à logger) — 10s fait échouer proprement et vite à la place.
 EMAIL_TIMEOUT       = int(os.environ.get('EMAIL_TIMEOUT', '10'))
+
+# Diagnostic imprimé une fois au démarrage de CHAQUE worker, pour ne plus
+# jamais avoir à deviner quelle config a réellement été prise en compte par
+# Railway — ça a été la cause de plusieurs heures de diagnostic à l'aveugle :
+# un simple oubli d'EMAIL_BACKEND fait retomber silencieusement sur "console"
+# (aucune erreur, aucun email réel, rien à logger côté envoi). Jamais le mot
+# de passe.
+print(
+    f"[EMAIL CONFIG] backend={EMAIL_BACKEND} host={EMAIL_HOST or '(vide)'} "
+    f"port={EMAIL_PORT} tls={EMAIL_USE_TLS} ssl={EMAIL_USE_SSL} "
+    f"user={'(défini)' if EMAIL_HOST_USER else '(vide)'} "
+    f"from={DEFAULT_FROM_EMAIL}"
+)
 
 # URL du frontend React — utilisée pour construire les liens envoyés par email
 # (reset mot de passe, vérification), puisque c'est React qui affiche ces pages,
