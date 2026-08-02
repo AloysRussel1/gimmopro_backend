@@ -206,7 +206,9 @@ def envoyer_email_reset_password(user, token):
 def envoyer_email_verification(user, token):
     from django.conf import settings
     from django.core.mail import send_mail
+    from django.template.loader import render_to_string
     lien = f"{settings.FRONTEND_URL}/verifier-email?token={token}"
+    html_message = render_to_string('app/email_verification.html', {'lien': lien})
     send_mail(
         subject="Confirmez votre adresse email — Gimmopro",
         message=(
@@ -215,5 +217,6 @@ def envoyer_email_verification(user, token):
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email],
+        html_message=html_message,
         fail_silently=False,
     )

@@ -94,19 +94,23 @@ class RegisterView(APIView):
             return Response({'error': 'Cet email est déjà associé à un compte.'}, status=400)
 
         username = _generer_username_depuis_email(email)
-        user     = User.objects.create_user(username=username, password=password, email=email)
+        # is_active=False : le compte ne peut pas se connecter tant que l'email
+        # n'est pas confirmé — EmailOrUsernameBackend/SimpleJWT refusent déjà
+        # l'auth pour un user inactif (Django gère ça nativement, rien à ajouter
+        # côté login). Le compte est activé par EmailVerifyConfirmView.
+        user = User.objects.create_user(username=username, password=password, email=email, is_active=False)
         Profile.objects.create(user=user, is_verified=False)
 
         try:
             envoyer_email_verification(user, make_email_verify_token(user))
         except Exception:
             pass  # l'envoi d'email ne doit jamais faire échouer la création du compte
+            # (l'utilisateur pourra toujours redemander l'envoi via EmailVerifyRequestView)
 
-        refresh = RefreshToken.for_user(user)
+        # Pas de JWT ici : le compte est inactif tant que l'email n'est pas
+        # confirmé, donc rien à connecter pour l'instant.
         return Response({
-            'message': 'Compte créé avec succès.',
-            'access':  str(refresh.access_token),
-            'refresh': str(refresh),
+            'message': "Compte créé avec succès. Un email de confirmation vous a été envoyé.",
         }, status=201)
 
 
@@ -161,15 +165,24 @@ class PasswordResetConfirmView(APIView):
 
 
 class EmailVerifyRequestView(APIView):
-    """Renvoie un email de vérification (ex: le premier lien a expiré)."""
-    permission_classes = [IsAuthenticated]
+    """Renvoie un email de vérification (ex: le premier lien a expiré, ou
+    l'envoi initial a échoué). AllowAny + par email : un utilisateur fraîchement
+    inscrit est is_active=False, donc SANS JWT — il ne pourrait jamais atteindre
+    cet endpoint s'il fallait être authentifié. Réponse identique que le compte
+    existe/soit déjà vérifié ou non, pour ne pas permettre l'énumération
+    d'emails (même logique que PasswordResetRequestView)."""
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        try:
-            envoyer_email_verification(request.user, make_email_verify_token(request.user))
-        except Exception:
-            return Response({'error': "Échec de l'envoi de l'email."}, status=500)
-        return Response({'message': 'Email de vérification renvoyé.'})
+        email = request.data.get('email', '').strip()
+        if email:
+            user = User.objects.filter(email__iexact=email, is_active=False).first()
+            if user:
+                try:
+                    envoyer_email_verification(user, make_email_verify_token(user))
+                except Exception:
+                    pass
+        return Response({'message': "Si un compte non vérifié existe pour cet email, un nouveau lien de confirmation vient d'être envoyé."})
 
 
 class EmailVerifyConfirmView(APIView):
@@ -180,10 +193,23 @@ class EmailVerifyConfirmView(APIView):
         user = verify_email_verify_token(token, User)
         if not user:
             return Response({'error': 'Lien invalide ou expiré.'}, status=400)
+
         profile, _ = Profile.objects.get_or_create(user=user)
         profile.is_verified = True
         profile.save(update_fields=['is_verified'])
-        return Response({'message': 'Adresse email vérifiée avec succès.'})
+
+        if not user.is_active:
+            user.is_active = True
+            user.save(update_fields=['is_active'])
+
+        # Le compte vient d'être activé : on connecte directement l'utilisateur
+        # (évite un aller-retour supplémentaire vers l'écran de login).
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'message': 'Adresse email vérifiée avec succès.',
+            'access':  str(refresh.access_token),
+            'refresh': str(refresh),
+        })
 
 
 # ── DASHBOARD ─────────────────────────────────────

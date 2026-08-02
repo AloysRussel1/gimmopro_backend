@@ -188,12 +188,27 @@ class AuthTest(APITestCase):
         self.logout_url = reverse("logout")
 
     def test_register_success(self):
+        # Le compte est créé inactif tant que l'email n'est pas confirmé —
+        # pas de JWT à l'inscription (voir EmailVerifyConfirmView pour ça).
         res = self.client.post(self.register_url, {
             "email": "aloys@mail.com",
             "password": "motdepasse123",
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        self.assertIn("access", res.data)
+        self.assertNotIn("access", res.data)
+        user = User.objects.get(email="aloys@mail.com")
+        self.assertFalse(user.is_active)
+
+    def test_register_puis_connexion_refusee_avant_verification(self):
+        self.client.post(self.register_url, {
+            "email": "aloys@mail.com",
+            "password": "motdepasse123",
+        })
+        res = self.client.post(self.login_url, {
+            "username": "aloys@mail.com",
+            "password": "motdepasse123",
+        })
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_register_email_deja_pris(self):
         User.objects.create_user(username="aloys", password="test123", email="aloys@mail.com")
