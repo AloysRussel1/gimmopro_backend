@@ -1,5 +1,6 @@
 import re
 import os
+import logging
 
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.models import User
@@ -8,6 +9,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import HttpResponse, FileResponse, Http404
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.utils.decorators import method_decorator
+from django.db import transaction, IntegrityError
 from django.db.models import Sum
 from django.db.models.functions import TruncMonth
 from dateutil.relativedelta import relativedelta
@@ -42,6 +44,8 @@ from .utils import (
 
 NOM_MOIS = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
             'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
+
+logger = logging.getLogger(__name__)
 
 
 # ── HELPERS PDF ───────────────────────────────────
@@ -93,19 +97,37 @@ class RegisterView(APIView):
         if User.objects.filter(email__iexact=email).exists():
             return Response({'error': 'Cet email est déjà associé à un compte.'}, status=400)
 
-        username = _generer_username_depuis_email(email)
-        # is_active=False : le compte ne peut pas se connecter tant que l'email
-        # n'est pas confirmé — EmailOrUsernameBackend/SimpleJWT refusent déjà
-        # l'auth pour un user inactif (Django gère ça nativement, rien à ajouter
-        # côté login). Le compte est activé par EmailVerifyConfirmView.
-        user = User.objects.create_user(username=username, password=password, email=email, is_active=False)
-        Profile.objects.create(user=user, is_verified=False)
+        try:
+            with transaction.atomic():
+                username = _generer_username_depuis_email(email)
+                # is_active=False : le compte ne peut pas se connecter tant que
+                # l'email n'est pas confirmé — EmailOrUsernameBackend/SimpleJWT
+                # refusent déjà l'auth pour un user inactif (Django gère ça
+                # nativement, rien à ajouter côté login). Le compte est activé
+                # par EmailVerifyConfirmView.
+                user = User.objects.create_user(
+                    username=username, password=password, email=email, is_active=False
+                )
+                Profile.objects.create(user=user, is_verified=False)
+        except IntegrityError:
+            # Filet de sécurité derrière le check ci-dessus : deux inscriptions
+            # quasi simultanées avec le même email (ou une dérivation de
+            # username qui collisionne) peuvent passer le premier check puis
+            # se percuter à l'écriture. Avant ce filet, ce cas remontait une
+            # IntegrityError non gérée -> 500 brut au lieu d'un 400 propre.
+            logger.warning("Inscription en doublon détectée à l'écriture pour %s", email)
+            return Response({'error': 'Cet email est déjà associé à un compte.'}, status=400)
+        except Exception:
+            logger.exception("Erreur inattendue lors de la création du compte pour %s", email)
+            return Response({'error': "Erreur lors de la création du compte. Réessayez plus tard."}, status=500)
 
         try:
             envoyer_email_verification(user, make_email_verify_token(user))
-        except Exception:
-            pass  # l'envoi d'email ne doit jamais faire échouer la création du compte
-            # (l'utilisateur pourra toujours redemander l'envoi via EmailVerifyRequestView)
+        except Exception as e:
+            # L'échec d'envoi ne doit jamais faire échouer la création du compte
+            # (l'utilisateur pourra toujours redemander l'envoi via
+            # EmailVerifyRequestView) — mais il ne doit plus jamais être invisible.
+            logger.error("Échec de l'envoi de l'email de vérification à %s : %s", email, e, exc_info=True)
 
         # Pas de JWT ici : le compte est inactif tant que l'email n'est pas
         # confirmé, donc rien à connecter pour l'instant.
@@ -136,8 +158,8 @@ class PasswordResetRequestView(APIView):
             if user:
                 try:
                     envoyer_email_reset_password(user, make_password_reset_token(user))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Échec de l'envoi de l'email de réinitialisation à %s : %s", email, e, exc_info=True)
         # Réponse identique que le compte existe ou non — évite de révéler
         # par ce biais quelles adresses email sont enregistrées (énumération).
         return Response({'message': "Si un compte existe pour cet email, un lien de réinitialisation vient d'être envoyé."})
@@ -180,8 +202,8 @@ class EmailVerifyRequestView(APIView):
             if user:
                 try:
                     envoyer_email_verification(user, make_email_verify_token(user))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Échec du renvoi de l'email de vérification à %s : %s", email, e, exc_info=True)
         return Response({'message': "Si un compte non vérifié existe pour cet email, un nouveau lien de confirmation vient d'être envoyé."})
 
 

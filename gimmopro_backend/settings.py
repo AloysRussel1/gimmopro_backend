@@ -148,7 +148,17 @@ EMAIL_PORT          = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS       = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
-DEFAULT_FROM_EMAIL  = os.environ.get('DEFAULT_FROM_EMAIL', 'no-reply@gimmopro.local')
+# Beaucoup de fournisseurs SMTP (Gmail compris) rejettent silencieusement
+# l'envoi si l'en-tête From: ne correspond pas au compte authentifié — sans
+# DEFAULT_FROM_EMAIL explicite, on retombe donc sur EMAIL_HOST_USER (le
+# compte réellement authentifié) plutôt que sur un domaine non vérifié
+# comme "no-reply@gimmopro.local", qui aurait fait échouer l'envoi côté
+# fournisseur sans jamais remonter d'erreur claire jusqu'ici.
+DEFAULT_FROM_EMAIL  = os.environ.get('DEFAULT_FROM_EMAIL') or EMAIL_HOST_USER or 'no-reply@gimmopro.local'
+# Sans timeout explicite, un SMTP qui ne répond pas peut bloquer la requête
+# jusqu'à ce que gunicorn tue le worker de force (aucune exception Python
+# propre, donc rien à logger) — 10s fait échouer proprement et vite à la place.
+EMAIL_TIMEOUT       = int(os.environ.get('EMAIL_TIMEOUT', '10'))
 
 # URL du frontend React — utilisée pour construire les liens envoyés par email
 # (reset mot de passe, vérification), puisque c'est React qui affiche ces pages,
