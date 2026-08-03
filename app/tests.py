@@ -194,6 +194,7 @@ class AuthTest(APITestCase):
         res = self.client.post(self.register_url, {
             "email": "aloys@mail.com",
             "password": "motdepasse123",
+            "accept_terms": True,
         })
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertNotIn("access", res.data)
@@ -204,6 +205,7 @@ class AuthTest(APITestCase):
         self.client.post(self.register_url, {
             "email": "aloys@mail.com",
             "password": "motdepasse123",
+            "accept_terms": True,
         })
         res = self.client.post(self.login_url, {
             "username": "aloys@mail.com",
@@ -216,8 +218,37 @@ class AuthTest(APITestCase):
         res = self.client.post(self.register_url, {
             "email": "aloys@mail.com",
             "password": "motdepasse123",
+            "accept_terms": True,
         })
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_register_refuse_sans_acceptation_cgu(self):
+        """La validation cote frontend ne suffit jamais a elle seule -- un
+        appel direct a l'API sans accept_terms doit aussi etre rejete."""
+        res = self.client.post(self.register_url, {
+            "email": "aloys@mail.com",
+            "password": "motdepasse123",
+        })
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="aloys@mail.com").exists())
+
+    def test_register_refuse_si_acceptation_cgu_false(self):
+        res = self.client.post(self.register_url, {
+            "email": "aloys@mail.com",
+            "password": "motdepasse123",
+            "accept_terms": False,
+        })
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_register_enregistre_horodatage_acceptation_cgu(self):
+        res = self.client.post(self.register_url, {
+            "email": "aloys@mail.com",
+            "password": "motdepasse123",
+            "accept_terms": True,
+        })
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="aloys@mail.com")
+        self.assertIsNotNone(user.profile.terms_accepted_at)
 
     def test_login_success(self):
         User.objects.create_user(username="aloys", password="motdepasse123")

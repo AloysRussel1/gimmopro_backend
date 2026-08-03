@@ -3,6 +3,7 @@ import os
 import logging
 
 from django.conf import settings
+from django.utils import timezone
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.models import User
 from django.core.validators import validate_email
@@ -79,6 +80,7 @@ class RegisterView(APIView):
     def post(self, request):
         email    = request.data.get('email', '').strip()
         password = request.data.get('password', '')
+        accept_terms = request.data.get('accept_terms')
 
         if not email or not password:
             return Response({'error': 'Email et mot de passe sont requis.'}, status=400)
@@ -88,6 +90,14 @@ class RegisterView(APIView):
             return Response({'error': 'Adresse email invalide.'}, status=400)
         if len(password) < 8:
             return Response({'error': 'Le mot de passe doit contenir au moins 8 caractères.'}, status=400)
+        # Vérifié aussi côté frontend, mais ne jamais faire confiance
+        # uniquement à une validation client -- un appel direct à l'API
+        # pourrait sinon créer un compte sans preuve d'acceptation. Comparé
+        # en texte plutôt qu'avec "is True" : un payload multipart/form-data
+        # (au lieu de JSON) transmet toujours un booléen sous forme de
+        # chaîne ("True"/"False"), jamais un vrai bool Python.
+        if str(accept_terms).lower() != 'true':
+            return Response({'error': "Vous devez accepter les conditions d'utilisation et la politique de confidentialité."}, status=400)
         if User.objects.filter(email__iexact=email).exists():
             return Response({'error': 'Cet email est déjà associé à un compte.'}, status=400)
 
@@ -102,7 +112,9 @@ class RegisterView(APIView):
                 user = User.objects.create_user(
                     username=username, password=password, email=email, is_active=False
                 )
-                Profile.objects.create(user=user, is_verified=False)
+                # Horodatage de preuve : la validation ci-dessus garantit déjà
+                # accept_terms is True à ce stade.
+                Profile.objects.create(user=user, is_verified=False, terms_accepted_at=timezone.now())
                 log_activity(user, 'REGISTER', description=email)
         except IntegrityError:
             # Filet de sécurité derrière le check ci-dessus : deux inscriptions

@@ -27,8 +27,8 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = Profile
-        fields = ['username', 'email', 'nom', 'telephone', 'adresse', 'is_verified', 'is_staff', 'is_superuser']
-        read_only_fields = ['is_verified']
+        fields = ['username', 'email', 'nom', 'telephone', 'adresse', 'is_verified', 'is_staff', 'is_superuser', 'terms_accepted_at']
+        read_only_fields = ['is_verified', 'terms_accepted_at']
 
     def get_nom(self, obj):
         return obj.user.get_full_name() or obj.user.username

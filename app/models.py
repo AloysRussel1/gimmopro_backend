@@ -33,6 +33,10 @@ class Profile(models.Model):
     telephone   = models.CharField(max_length=20, blank=True)
     adresse     = models.CharField(max_length=300, blank=True)
     is_verified = models.BooleanField(default=False)
+    # Preuve horodatée de l'acceptation des CGU/politique de confidentialité
+    # à l'inscription -- null pour les comptes créés avant l'introduction de
+    # ce champ (RegisterView l'exige désormais pour tout nouveau compte).
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Profil de {self.user.username}"
