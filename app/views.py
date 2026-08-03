@@ -151,6 +151,14 @@ class LoggingTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = LoggingTokenObtainPairSerializer
+    # Explicite plutôt qu'implicite : TokenViewBase (SimpleJWT) met déjà
+    # permission_classes=() et authentication_classes=() par défaut (vérifié
+    # sur la classe réellement chargée), donc ceci ne change rien au
+    # comportement -- mais documente noir sur blanc que le login doit rester
+    # accessible sans JWT préalable (on ne peut pas exiger un token pour
+    # obtenir un token).
+    authentication_classes = []
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
         # Log de diagnostic temporaire : la requête HTTP brute telle qu'elle
