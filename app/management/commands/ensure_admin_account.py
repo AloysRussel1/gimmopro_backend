@@ -8,22 +8,23 @@ from app.utils import _generer_username_depuis_email
 
 
 class Command(BaseCommand):
-    """Garantit qu'un compte Super Admin de secours existe et est actif, à
-    partir des variables d'environnement SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD.
-    Ne fait RIEN si elles ne sont pas définies -- pas de secret en dur dans le
-    code (un mot de passe committé dans l'historique Git y reste pour
-    toujours, même après suppression ultérieure du fichier).
+    """Garantit qu'un compte Super Admin de secours existe, est actif, et a
+    le mot de passe défini par SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD. Ne fait
+    RIEN si elles ne sont pas définies -- pas de secret en dur dans le code
+    (un mot de passe committé dans l'historique Git y reste pour toujours,
+    même après suppression ultérieure du fichier).
 
     Idempotent et pensé pour tourner à CHAQUE démarrage (voir Procfile) :
-    - Si le compte n'existe pas -> il est créé.
-    - S'il existe mais n'est pas correctement configuré (inactif / pas admin,
-      ex: après un redémarrage sur une base qui s'est révélée non-persistante)
-      -> il est réparé, mot de passe resynchronisé depuis la variable d'env.
-    - S'il existe et est déjà correctement configuré -> rien n'est touché,
-      surtout PAS le mot de passe (on ne doit jamais écraser un mot de passe
-      que l'utilisateur aurait changé depuis dans l'app).
+    à chaque exécution, le mot de passe et les flags is_active/is_staff/
+    is_superuser sont FORCÉS depuis les variables d'environnement -- y
+    compris si le compte existait déjà et semblait correctement configuré.
+    C'est voulu : ce compte de secours doit rester accessible avec les
+    identifiants connus même si un déploiement précédent a fini par pointer
+    vers une base différente (ex: bascule SQLite éphémère <-> Postgres) où le
+    compte a été modifié autrement. Si un mot de passe différent doit être
+    conservé durablement, ne pas définir SUPERADMIN_EMAIL/PASSWORD.
     """
-    help = "Crée/répare un compte Super Admin de secours depuis SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD (no-op si absentes)."
+    help = "Crée/force un compte Super Admin de secours depuis SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD à chaque démarrage (no-op si absentes)."
 
     def handle(self, *args, **options):
         email    = os.environ.get('SUPERADMIN_EMAIL', '').strip()
@@ -39,15 +40,11 @@ class Command(BaseCommand):
             username = _generer_username_depuis_email(email)
             user = User.objects.create_user(username=username, email=email, password=password)
             self.stdout.write(self.style.SUCCESS(f"Compte Super Admin de secours créé : {email} (username={username})"))
-        elif not (user.is_active and user.is_staff and user.is_superuser):
+        else:
             user.set_password(password)
             self.stdout.write(self.style.WARNING(
-                f"Compte {email} trouvé mais mal configuré (is_active={user.is_active}, "
-                f"is_staff={user.is_staff}, is_superuser={user.is_superuser}) -- réparé, mot de passe resynchronisé."
+                f"Compte Super Admin {email} trouvé -- mot de passe et statut admin resynchronisés depuis SUPERADMIN_PASSWORD."
             ))
-        else:
-            self.stdout.write(f"Compte Super Admin {email} déjà correctement configuré -- rien à faire.")
-            return
 
         user.is_active = True
         user.is_staff = True
