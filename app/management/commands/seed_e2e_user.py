@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from app.models import Logement, Profile
+from app.models import Logement, Occupant, Profile
 
 EMAIL = 'e2e.test@gimmopro.local'
 PASSWORD = 'CypressTest123!'
@@ -32,8 +32,14 @@ class Command(BaseCommand):
             user=user, defaults={'is_verified': True, 'terms_accepted_at': timezone.now()}
         )
 
-        # Repart d'un état propre : supprime les logements (et tout ce qui en
-        # dépend en cascade -- occupants, paiements, dépenses...) du run précédent.
+        # Repart d'un état propre. Occupant.logement est en SET_NULL (pas
+        # CASCADE) -- supprimer les logements ne supprime PAS les occupants,
+        # ça les orpheline juste (logement=NULL). Sans cette ligne, les
+        # occupants du run précédent s'accumulent et finissent par violer la
+        # contrainte unique_together (proprietaire, email)/(proprietaire, cni)
+        # sur un CNI/email fixe réutilisé à chaque exécution du test --
+        # trouvé exactement comme ça, via un vrai run Cypress qui a échoué.
+        Occupant.objects.filter(proprietaire=user).delete()
         Logement.objects.filter(proprietaire=user).delete()
 
         self.stdout.write(self.style.SUCCESS(f"Compte E2E prêt : {EMAIL} / {PASSWORD}"))
