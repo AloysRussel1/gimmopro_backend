@@ -152,6 +152,25 @@ class LoggingTokenObtainPairSerializer(TokenObtainPairSerializer):
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = LoggingTokenObtainPairSerializer
 
+    def post(self, request, *args, **kwargs):
+        # Log de diagnostic temporaire : la requête HTTP brute telle qu'elle
+        # arrive vraiment (avant tout traitement DRF), pour distinguer un
+        # problème de payload/en-têtes d'un problème d'identifiants — jamais
+        # le mot de passe en clair, et le token Authorization tronqué seulement.
+        safe_data = dict(request.data)
+        if 'password' in safe_data:
+            safe_data['password'] = f"(longueur={len(str(safe_data['password']))})"
+        auth_header = request.headers.get('Authorization', '')
+        logger.warning(
+            "CustomTokenObtainPairView.post() -- data=%r | Content-Type=%r | Origin=%r | "
+            "Authorization=%s",
+            safe_data,
+            request.headers.get('Content-Type'),
+            request.headers.get('Origin'),
+            (auth_header[:20] + '…') if auth_header else '(absent)',
+        )
+        return super().post(request, *args, **kwargs)
+
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]

@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import User
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -24,27 +25,32 @@ class EmailOrUsernameBackend(ModelBackend):
             logger.warning("  -> rejeté : identifiant ou mot de passe manquant")
             return None
 
-        # Chercher par username d'abord
-        try:
-            user = User.objects.get(username=username)
-            logger.warning("  -> trouvé par USERNAME exact : id=%s email=%r is_active=%s", user.id, user.email, user.is_active)
-        except User.DoesNotExist:
-            # Essayer par email
-            try:
-                user = User.objects.get(email__iexact=username)
-                logger.warning("  -> trouvé par EMAIL (iexact) : id=%s username=%r is_active=%s", user.id, user.username, user.is_active)
-            except User.DoesNotExist:
-                logger.warning("  -> rejeté : aucun compte ne correspond ni par username ni par email")
-                return None
-            except User.MultipleObjectsReturned:
-                # Si plusieurs comptes ont le même email, prendre le premier actif
-                doublons = list(User.objects.filter(email__iexact=username).values_list('id', 'username', 'is_active'))
-                logger.warning("  -> PLUSIEURS comptes partagent cet email : %s", doublons)
-                user = User.objects.filter(email__iexact=username, is_active=True).first()
-                if not user:
-                    logger.warning("  -> rejeté : aucun des comptes en doublon n'est actif")
-                    return None
-                logger.warning("  -> retenu parmi les doublons : id=%s", user.id)
+        # Une seule requête, insensible à la casse sur LES DEUX champs — avant,
+        # seule la recherche par email était __iexact ; la recherche par
+        # username exigeait une casse parfaite, ce qui pouvait à tort rejeter
+        # un identifiant saisi avec une casse différente de celle enregistrée.
+        candidats = list(User.objects.filter(Q(username__iexact=username) | Q(email__iexact=username)))
+        logger.warning(
+            "  -> %d compte(s) correspondant à %r (username ou email, insensible à la casse) : %s",
+            len(candidats), username, [(u.id, u.username, u.email, u.is_active) for u in candidats],
+        )
+
+        if not candidats:
+            logger.warning("  -> rejeté : aucun compte ne correspond ni par username ni par email")
+            return None
+
+        if len(candidats) == 1:
+            user = candidats[0]
+        else:
+            # Doublon (ex: plusieurs comptes partageant le même email — le
+            # User model par défaut de Django n'a pas de contrainte d'unicité
+            # dessus). Priorité à une correspondance EXACTE de username, puis
+            # à un compte actif, dans cet ordre.
+            exact = [u for u in candidats if u.username.lower() == username.strip().lower()]
+            pool = exact or candidats
+            actifs = [u for u in pool if u.is_active]
+            user = (actifs or pool)[0]
+            logger.warning("  -> PLUSIEURS comptes correspondaient, retenu : id=%s", user.id)
 
         # Vérifier le mot de passe
         pwd_ok = user.check_password(password)
