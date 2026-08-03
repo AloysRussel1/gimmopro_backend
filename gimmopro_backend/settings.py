@@ -113,6 +113,21 @@ DATABASES = {
     )
 }
 
+# Diagnostic imprimé une fois par worker au démarrage — même logique que
+# [EMAIL CONFIG] : si DATABASE_URL n'est pas réellement présent dans les
+# variables d'environnement Railway (service Postgres non attaché, ou
+# variable détachée), dj_database_url.config() retombe SILENCIEUSEMENT sur
+# SQLite. Sur Railway, le système de fichiers du conteneur est ÉPHÉMÈRE
+# (aucune persistance entre deux déploiements sauf Volume explicite) : chaque
+# redéploiement repartirait alors d'un fichier SQLite vide -- migrations
+# réappliquées depuis zéro, données et comptes créés manuellement disparus.
+# Cette ligne permet de le confirmer sans deviner.
+print(
+    f"[DATABASE CONFIG] engine={DATABASES['default'].get('ENGINE')} "
+    f"name={DATABASES['default'].get('NAME')} "
+    f"DATABASE_URL défini dans l'environnement={bool(os.environ.get('DATABASE_URL'))}"
+)
+
 # ── Authentification ──────────────────────────────
 # Permet login avec username OU email
 AUTHENTICATION_BACKENDS = [
