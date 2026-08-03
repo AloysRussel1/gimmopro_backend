@@ -2,8 +2,20 @@
 et de cloisonnement multi-utilisateur (chaque requête n'accède qu'à
 ses propres données)."""
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from django.core import signing
 from django.shortcuts import get_object_or_404
+
+
+def fcfa_arrondi(montant) -> int:
+    """Arrondit un montant au franc CFA entier le plus proche -- jamais
+    tronqué via int(), qui perdrait silencieusement des centimes sur un
+    montant non entier (int(Decimal('25000.60')) -> 25000, alors que la
+    valeur réelle doit s'arrondir à 25001). Le FCFA n'a pas de sous-unité,
+    donc arrondir à l'entier est le comportement correct pour tout
+    affichage (PDF, email) -- jamais pour la valeur stockée elle-même,
+    qui reste un Decimal intact en base."""
+    return int(Decimal(montant).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
 
 
 def _generer_username_depuis_email(email):
@@ -144,7 +156,7 @@ def nombre_en_lettres(n: int) -> str:
 
 def montant_en_lettres_fcfa(montant) -> str:
     """Ex: 125000 -> 'cent vingt-cinq mille francs CFA'."""
-    return f"{nombre_en_lettres(int(montant))} francs CFA"
+    return f"{nombre_en_lettres(fcfa_arrondi(montant))} francs CFA"
 
 
 # ── Liens publics de reçu (signés, sans authentification) ──────────
@@ -246,7 +258,7 @@ def envoyer_email_caution_recu(occupant, pdf_buffer):
 
     comp = occupant.compartiment
     immeuble = comp.logement.nom if comp else (occupant.logement.nom if occupant.logement else '—')
-    montant_txt = f"{int(occupant.caution_versee):,} FCFA".replace(',', ' ')
+    montant_txt = f"{fcfa_arrondi(occupant.caution_versee):,} FCFA".replace(',', ' ')
 
     html_message = render_to_string('app/caution_recu_email.html', {
         'occupant_nom':     occupant.nom_complet,

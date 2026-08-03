@@ -42,7 +42,7 @@ from .serializers import (
 )
 from .pagination import StandardResultsSetPagination
 from .utils import (
-    montant_en_lettres_fcfa, verify_recu_token,
+    montant_en_lettres_fcfa, fcfa_arrondi, verify_recu_token,
     get_logement_or_404, get_compartiment_or_404, get_occupant_or_404, get_paiement_or_404,
     get_depense_or_404, get_document_or_404, get_etat_des_lieux_or_404,
     make_password_reset_token, verify_password_reset_token, envoyer_email_reset_password,
@@ -593,13 +593,13 @@ class OccupantContratPDFView(APIView):
         jour = occupant.date_debut_contrat.day
         jour_echeance = "1er" if jour == 1 else str(jour)
 
-        loyer_int = int(occupant.loyer)
+        loyer_int = fcfa_arrondi(occupant.loyer)
         loyer_txt = f"{loyer_int:,} FCFA".replace(',', ' ')
         loyer_lettres = montant_en_lettres_fcfa(loyer_int)
 
         caution = occupant.caution_versee or 0
         if caution > 0:
-            caution_txt = f"{int(caution):,} FCFA ({montant_en_lettres_fcfa(int(caution))})".replace(',', ' ')
+            caution_txt = f"{fcfa_arrondi(caution):,} FCFA ({montant_en_lettres_fcfa(caution)})".replace(',', ' ')
         else:
             caution_txt = "Aucun dépôt de garantie exigé."
 
@@ -808,11 +808,11 @@ def _build_recu_pdf(paiement):
     # NB: `leading` (hauteur de ligne) doit être défini explicitement en fonction
     # de `fontSize` — hériter d'un style pensé pour du texte 10pt (leading=14)
     # sur une police 26pt clippe le texte, faute de place verticale suffisante.
-    montant_lettres = montant_en_lettres_fcfa(int(paiement.montant_verse))
+    montant_lettres = montant_en_lettres_fcfa(paiement.montant_verse)
     montant_style = ParagraphStyle('m', parent=cell_style, fontSize=26, leading=32, alignment=1, fontName='Helvetica-Bold')
     payé_style    = ParagraphStyle('s', parent=cell_style, fontSize=13, leading=17, alignment=1, fontName='Helvetica-Bold', textColor=colors.HexColor('#16A34A'), backColor=colors.white)
     montant_data = [[
-        Paragraph(f"{int(paiement.montant_verse):,} FCFA".replace(',', ' '), montant_style),
+        Paragraph(f"{fcfa_arrondi(paiement.montant_verse):,} FCFA".replace(',', ' '), montant_style),
         Paragraph("✓ PAYÉ", payé_style),
     ]]
     montant_table = Table(montant_data, colWidths=[12*cm, 4*cm], rowHeights=[1.6*cm])
@@ -852,11 +852,11 @@ def _build_recu_pdf(paiement):
     story.append(Paragraph("DÉTAILS DU PAIEMENT", h2_style))
     details = [
         ['Description', 'Valeur'],
-        ['Loyer mensuel',       f"{int(occupant.loyer):,} FCFA".replace(',', ' ')],
+        ['Loyer mensuel',       f"{fcfa_arrondi(occupant.loyer):,} FCFA".replace(',', ' ')],
         ['Nombre de mois',      str(paiement.nombre_mois)],
         ['Période couverte',    f"Du {paiement.date_debut_periode.strftime('%d/%m/%Y')} au {paiement.date_fin_periode.strftime('%d/%m/%Y')}"],
         ['Mode de paiement',    paiement.get_mode_paiement_display()],
-        ['Montant total versé', f"{int(paiement.montant_verse):,} FCFA".replace(',', ' ')],
+        ['Montant total versé', f"{fcfa_arrondi(paiement.montant_verse):,} FCFA".replace(',', ' ')],
         ['Solde restant dû',    "0 FCFA — payé intégralement"],
         ['Prochain paiement',   f"À partir du {(paiement.date_fin_periode).strftime('%d/%m/%Y')}"],
         ['Statut',              paiement.statut],
@@ -932,11 +932,11 @@ def _build_recu_caution_pdf(occupant):
     story.append(Paragraph(f"Locataire : {occupant.nom_complet}", center_style))
     story.append(Spacer(1, 0.4*cm))
 
-    montant_lettres = montant_en_lettres_fcfa(int(occupant.caution_versee))
+    montant_lettres = montant_en_lettres_fcfa(occupant.caution_versee)
     montant_style = ParagraphStyle('m', parent=cell_style, fontSize=26, leading=32, alignment=1, fontName='Helvetica-Bold')
     payé_style    = ParagraphStyle('s', parent=cell_style, fontSize=13, leading=17, alignment=1, fontName='Helvetica-Bold', textColor=colors.HexColor('#16A34A'), backColor=colors.white)
     montant_data = [[
-        Paragraph(f"{int(occupant.caution_versee):,} FCFA".replace(',', ' '), montant_style),
+        Paragraph(f"{fcfa_arrondi(occupant.caution_versee):,} FCFA".replace(',', ' '), montant_style),
         Paragraph("✓ VERSÉ", payé_style),
     ]]
     montant_table = Table(montant_data, colWidths=[12*cm, 4*cm], rowHeights=[1.6*cm])
@@ -978,7 +978,7 @@ def _build_recu_caution_pdf(occupant):
         ['Logement',            immeuble],
         ['Compartiment',        comp.nom if comp else '—'],
         ['Date de versement',   occupant.date_versement_caution.strftime('%d/%m/%Y')],
-        ['Montant versé',       f"{int(occupant.caution_versee):,} FCFA".replace(',', ' ')],
+        ['Montant versé',       f"{fcfa_arrondi(occupant.caution_versee):,} FCFA".replace(',', ' ')],
     ]
     t = Table(details, colWidths=[8*cm, 8*cm])
     t.setStyle(TableStyle([
@@ -1037,7 +1037,7 @@ def _build_recu_og_image(paiement):
 
     occupant = paiement.occupant
     immeuble = occupant.compartiment.logement.nom if occupant.compartiment else (occupant.logement.nom if occupant.logement else '')
-    montant_txt = f"{int(paiement.montant_verse):,} FCFA".replace(',', ' ')
+    montant_txt = f"{fcfa_arrondi(paiement.montant_verse):,} FCFA".replace(',', ' ')
     debut_txt = f"Loyer de {NOM_MOIS[paiement.date_debut_periode.month]} {paiement.date_debut_periode.year}"
 
     img = Image.new('RGB', (1200, 630), '#0F172A')
@@ -1118,7 +1118,7 @@ class RecuPublicLandingView(APIView):
             f'/api/paiements/{paiement_id}/recu/public/{token}/'
         )
         return render(request, 'app/recu_public.html', {
-            'montant_txt':      f"{int(paiement.montant_verse):,} FCFA".replace(',', ' '),
+            'montant_txt':      f"{fcfa_arrondi(paiement.montant_verse):,} FCFA".replace(',', ' '),
             'periode_txt':      periode_txt,
             'occupant_nom':     occupant.nom_complet,
             'immeuble':         immeuble,
@@ -1263,11 +1263,11 @@ class RapportMensuelPDFView(APIView):
         story.append(Paragraph("RÉSUMÉ FINANCIER", h2_style))
         resume = [
             ['', ''],
-            ['Total attendu ce mois',   f"{int(total_attendu):,} FCFA".replace(',', ' ')],
-            ['Total loyers encaissés (Entrées)', f"{int(total_encaisse):,} FCFA".replace(',', ' ')],
-            ['Total dépenses (Sorties)',         f"− {int(total_depenses):,} FCFA".replace(',', ' ')],
-            ['REVENU NET DU MOIS',               f"{int(revenu_net):,} FCFA".replace(',', ' ')],
-            ['Reste à encaisser',       f"{int(total_attendu - total_encaisse):,} FCFA".replace(',', ' ')],
+            ['Total attendu ce mois',   f"{fcfa_arrondi(total_attendu):,} FCFA".replace(',', ' ')],
+            ['Total loyers encaissés (Entrées)', f"{fcfa_arrondi(total_encaisse):,} FCFA".replace(',', ' ')],
+            ['Total dépenses (Sorties)',         f"− {fcfa_arrondi(total_depenses):,} FCFA".replace(',', ' ')],
+            ['REVENU NET DU MOIS',               f"{fcfa_arrondi(revenu_net):,} FCFA".replace(',', ' ')],
+            ['Reste à encaisser',       f"{fcfa_arrondi(total_attendu - total_encaisse):,} FCFA".replace(',', ' ')],
             ['Taux de recouvrement',    f"{int((total_encaisse/total_attendu*100) if total_attendu > 0 else 0)} %"],
             ['Nombre de paiements',     str(paiements_mois.count())],
             ['Locataires en retard',    str(len(occupants_retard))],
@@ -1300,7 +1300,7 @@ class RapportMensuelPDFView(APIView):
                     p.occupant.nom_complet,
                     p.occupant.compartiment.nom if p.occupant.compartiment else '—',
                     f"{p.date_debut_periode.strftime('%d/%m')} → {p.date_fin_periode.strftime('%d/%m/%Y')}",
-                    f"{int(p.montant_verse):,}".replace(',', ' '),
+                    f"{fcfa_arrondi(p.montant_verse):,}".replace(',', ' '),
                     p.date_paiement.strftime('%d/%m/%Y'),
                 ])
             t_pay = Table(rows, colWidths=[4.5*cm, 3.5*cm, 4*cm, 3*cm, 2.5*cm])
@@ -1323,7 +1323,7 @@ class RapportMensuelPDFView(APIView):
             for d in depenses_mois:
                 rows_d.append([
                     d.logement.nom, d.libelle, d.get_categorie_display(),
-                    f"{int(d.montant):,}".replace(',', ' '),
+                    f"{fcfa_arrondi(d.montant):,}".replace(',', ' '),
                     d.date.strftime('%d/%m/%Y'),
                 ])
             t_dep = Table(rows_d, colWidths=[3.5*cm, 4.5*cm, 3*cm, 2.5*cm, 2.5*cm])
@@ -1347,7 +1347,7 @@ class RapportMensuelPDFView(APIView):
                 rows_r.append([
                     o.nom_complet, o.telephone,
                     o.compartiment.nom if o.compartiment else '—',
-                    f"{int(o.loyer):,} FCFA".replace(',', ' '),
+                    f"{fcfa_arrondi(o.loyer):,} FCFA".replace(',', ' '),
                 ])
             t_retard = Table(rows_r, colWidths=[4.5*cm, 3.5*cm, 4*cm, 4*cm])
             t_retard.setStyle(TableStyle([
