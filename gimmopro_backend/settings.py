@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'anymail',
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -208,17 +209,28 @@ DEFAULT_FROM_EMAIL  = os.environ.get('DEFAULT_FROM_EMAIL') or EMAIL_HOST_USER or
 # propre, donc rien à logger) — 10s fait échouer proprement et vite à la place.
 EMAIL_TIMEOUT       = int(os.environ.get('EMAIL_TIMEOUT', '10'))
 
+# Railway bloque le SMTP sortant (587 ET 465) vers Brevo -- confirmé par un
+# TimeoutError reproductible sur les deux ports depuis ce réseau. L'API HTTP
+# de Brevo (port 443, jamais bloqué) contourne le problème. EMAIL_BACKEND=
+# anymail.backends.brevo.EmailBackend bascule vers ce chemin ; send_mail()
+# dans utils.py n'a besoin d'aucun changement, django-anymail est un
+# remplacement direct du backend email standard de Django.
+ANYMAIL = {
+    'BREVO_API_KEY': os.environ.get('BREVO_API_KEY', ''),
+}
+
 # Diagnostic imprimé une fois au démarrage de CHAQUE worker, pour ne plus
 # jamais avoir à deviner quelle config a réellement été prise en compte par
 # Railway — ça a été la cause de plusieurs heures de diagnostic à l'aveugle :
 # un simple oubli d'EMAIL_BACKEND fait retomber silencieusement sur "console"
 # (aucune erreur, aucun email réel, rien à logger côté envoi). Jamais le mot
-# de passe.
+# de passe ni la clé API.
 print(
     f"[EMAIL CONFIG] backend={EMAIL_BACKEND} host={EMAIL_HOST or '(vide)'} "
     f"port={EMAIL_PORT} tls={EMAIL_USE_TLS} ssl={EMAIL_USE_SSL} "
     f"user={'(défini)' if EMAIL_HOST_USER else '(vide)'} "
-    f"from={DEFAULT_FROM_EMAIL}"
+    f"from={DEFAULT_FROM_EMAIL} "
+    f"brevo_api_key={'(définie)' if ANYMAIL['BREVO_API_KEY'] else '(vide)'}"
 )
 
 # URL du frontend React — utilisée pour construire les liens envoyés par email
