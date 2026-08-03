@@ -1,3 +1,5 @@
+import csv
+import io
 from django.test import TestCase, override_settings
 from django.contrib.auth.models import User
 from django.core import mail
@@ -6,8 +8,10 @@ from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from datetime import date, timedelta
 from decimal import Decimal
+from openpyxl import load_workbook
 
 from .models import Logement, Compartiment, Occupant, Paiement, Depense
+from .utils import make_email_verify_token
 
 
 # ─────────────────────────────────────────
@@ -625,3 +629,150 @@ class ExportAPITest(AuthenticatedAPITest):
         res = self.client.get(reverse("export-paiements") + "?export_format=csv")
         body = res.content.decode("utf-8-sig")
         self.assertNotIn(autre_occupant.nom_complet, body)
+
+
+# ─────────────────────────────────────────
+# PARCOURS UTILISATEUR COMPLET (intégration bout en bout)
+# ─────────────────────────────────────────
+# Recette finale avant mise en production réelle. Chaque étape appelle le
+# VRAI endpoint, dans l'ordre où un utilisateur réel les déclencherait --
+# aucun raccourci (ex: pas de création directe en base pour contourner
+# l'inscription), pour valider la chaîne complète telle qu'elle sera
+# réellement utilisée, pas des morceaux isolés.
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+class ParcoursCompletIntegrationTest(APITestCase):
+
+    def test_parcours_complet_utilisateur(self):
+        client = APIClient()
+        annee = date.today().year
+
+        # ── 1. Inscription ──────────────────────────────
+        res = client.post(reverse('register'), {
+            'email': 'papa.test@example.com',
+            'password': 'MotDePasse123',
+            'accept_terms': True,
+        })
+        self.assertEqual(res.status_code, 201, res.content)
+        user = User.objects.get(email='papa.test@example.com')
+        self.assertFalse(user.is_active)  # inactif tant que l'email n'est pas confirmé
+        self.assertIsNotNone(user.profile.terms_accepted_at)  # preuve d'acceptation CGU horodatée
+
+        # ── 2. Vérification de l'email (vrai token, comme le lien reçu) ──
+        token = make_email_verify_token(user)
+        res = client.post(reverse('verify-email-confirm'), {'token': token})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertIn('access', res.data)
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+
+        # ── 3. Connexion (séparée, comme un retour ultérieur) ──
+        res = client.post(reverse('token_obtain_pair'), {
+            'username': 'papa.test@example.com', 'password': 'MotDePasse123',
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['access']}")
+
+        # ── 4. Création d'un logement ──
+        res = client.post(reverse('logement-list-create'), {
+            'nom': 'Résidence Papa', 'localisation': 'Douala, Bonapriso', 'description': 'Test recette',
+        })
+        self.assertEqual(res.status_code, 201, res.content)
+        logement_id = res.data['id']
+
+        # ── 5. Association d'un locataire ──
+        res = client.post(reverse('occupant-list-create'), {
+            'logement': logement_id,
+            'nom_complet': 'Jean Dupont', 'email': 'jean.dupont@example.com',
+            'telephone': '699000000', 'cni': 'CNI-PAPA-001',
+            'date_debut_contrat': str(date.today()),
+            'loyer': '50000.00',
+            'caution_versee': '100000.00',
+            'date_versement_caution': str(date.today()),
+            'date_prochain_paiement': str(date.today() + timedelta(days=30)),
+            'statut': 'Actif',
+        })
+        self.assertEqual(res.status_code, 201, res.content)
+        occupant_id = res.data['id']
+
+        # ── 6a. Bail (contrat) -- génération PDF ──
+        res = client.get(reverse('occupant-contrat', args=[occupant_id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+        self.assertTrue(res.content.startswith(b'%PDF'))
+        self.assertGreater(len(res.content), 1000)  # un vrai PDF, pas un fichier vide/corrompu
+
+        # ── 6b. Reçu de caution -- aperçu (GET) + téléchargement + envoi email ──
+        res = client.get(reverse('occupant-caution-recu', args=[occupant_id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.content.startswith(b'%PDF'))
+
+        res = client.post(reverse('occupant-caution-envoyer', args=[occupant_id]))
+        self.assertEqual(res.status_code, 200, res.content)
+        # 2 emails à ce stade : la vérification d'inscription (étape 1) + ce reçu.
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertEqual(mail.outbox[-1].to, ['jean.dupont@example.com'])
+        self.assertEqual(len(mail.outbox[-1].attachments), 1)
+
+        # ── 7. Paiement de loyer ──
+        res = client.post(reverse('paiement-list-create'), {
+            'occupant': occupant_id, 'montant_verse': '50000.00', 'nombre_mois': 1,
+            'date_paiement': str(date.today()), 'date_debut_periode': str(date.today()),
+            'mode_paiement': 'ESPECES',
+        })
+        self.assertEqual(res.status_code, 201, res.content)
+        paiement_id = res.data['id']
+
+        # ── 6c. Quittance (reçu de paiement) -- PDF ──
+        res = client.get(reverse('paiement-recu', args=[paiement_id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.content.startswith(b'%PDF'))
+
+        # ── 8. Dépense ──
+        res = client.post(reverse('depense-list-create'), {
+            'logement': logement_id, 'libelle': 'Peinture', 'montant': '15000.00',
+            'date': str(date.today()), 'categorie': 'ENTRETIEN',
+        })
+        self.assertEqual(res.status_code, 201, res.content)
+
+        # ── 9. Export comptable -- vérification ARITHMÉTIQUE des montants ──
+        # CSV : parsing réel (pas une recherche de sous-chaîne, qui pourrait
+        # matcher un nombre au mauvais endroit) pour vérifier la ligne exacte.
+        res = client.get(reverse('export-paiements') + f'?export_format=csv&annee={annee}')
+        reader = csv.reader(io.StringIO(res.content.decode('utf-8-sig')), delimiter=';')
+        lignes = list(reader)
+        ligne_paiement = next(l for l in lignes if l and l[1] == 'Jean Dupont')
+        self.assertEqual(ligne_paiement[8], '50000.0')  # colonne "Montant versé (FCFA)"
+
+        res = client.get(reverse('export-depenses') + f'?export_format=csv&annee={annee}')
+        reader = csv.reader(io.StringIO(res.content.decode('utf-8-sig')), delimiter=';')
+        lignes = list(reader)
+        ligne_depense = next(l for l in lignes if l and l[2] == 'Peinture')
+        self.assertEqual(ligne_depense[4], '15000.0')
+
+        # XLSX : lu avec openpyxl, valeurs numériques réelles (pas du texte).
+        res = client.get(reverse('export-recapitulatif-annuel') + f'?export_format=xlsx&annee={annee}')
+        wb = load_workbook(io.BytesIO(res.content))
+        ws = wb.active
+        lignes_xlsx = list(ws.iter_rows(values_only=True))
+        total_row = next(r for r in lignes_xlsx if r[0] == 'TOTAL ANNÉE')
+        self.assertEqual(total_row[1], 50000.0)  # loyers encaissés
+        self.assertEqual(total_row[2], 15000.0)  # dépenses
+        self.assertEqual(total_row[3], 35000.0)  # revenu net = 50000 - 15000
+
+        # ── 10. Isolation multi-tenant -- un second bailleur ne doit rien voir ──
+        autre = User.objects.create_user(username='autre_papa', password='x', email='autre@example.com')
+        autre_logement = Logement.objects.create(proprietaire=autre, nom='Logement Autrui', localisation='Yaoundé')
+        client2 = APIClient()
+        res = client2.post(reverse('token_obtain_pair'), {'username': 'autre_papa', 'password': 'x'})
+        client2.credentials(HTTP_AUTHORIZATION=f"Bearer {res.data['access']}")
+
+        res = client2.get(reverse('logement-list-create'))
+        self.assertEqual([l['id'] for l in res.data], [autre_logement.id])  # jamais le logement du premier utilisateur
+
+        res = client2.get(reverse('occupant-detail', args=[occupant_id]))
+        self.assertEqual(res.status_code, 404)  # jamais le locataire d'un autre
+
+        res = client2.get(reverse('export-paiements') + f'?export_format=csv&annee={annee}')
+        body2 = res.content.decode('utf-8-sig')
+        self.assertNotIn('Jean Dupont', body2)
