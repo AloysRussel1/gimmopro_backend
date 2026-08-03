@@ -2,6 +2,7 @@ import re
 import os
 import logging
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.models import User
 from django.core.validators import validate_email
@@ -114,13 +115,21 @@ class RegisterView(APIView):
             logger.exception("Erreur inattendue lors de la création du compte pour %s", email)
             return Response({'error': "Erreur lors de la création du compte. Réessayez plus tard."}, status=500)
 
+        token = make_email_verify_token(user)
         try:
-            envoyer_email_verification(user, make_email_verify_token(user))
+            envoyer_email_verification(user, token)
         except Exception as e:
             # L'échec d'envoi ne doit jamais faire échouer la création du compte
             # (l'utilisateur pourra toujours redemander l'envoi via
             # EmailVerifyRequestView) — mais il ne doit plus jamais être invisible.
+            # Filet de secours supplémentaire : le lien complet est loggé pour de
+            # vrai (pas juste l'erreur), pour pouvoir activer le compte à la main
+            # depuis les logs Railway le temps de corriger le SMTP en prod.
             logger.error("Échec de l'envoi de l'email de vérification à %s : %s", email, e, exc_info=True)
+            logger.warning(
+                "Lien d'activation de secours pour %s : %s/verifier-email?token=%s",
+                email, settings.FRONTEND_URL, token,
+            )
 
         # Pas de JWT ici : le compte est inactif tant que l'email n'est pas
         # confirmé, donc rien à connecter pour l'instant.
@@ -208,10 +217,15 @@ class EmailVerifyRequestView(APIView):
         if email:
             user = User.objects.filter(email__iexact=email, is_active=False).first()
             if user:
+                token = make_email_verify_token(user)
                 try:
-                    envoyer_email_verification(user, make_email_verify_token(user))
+                    envoyer_email_verification(user, token)
                 except Exception as e:
                     logger.error("Échec du renvoi de l'email de vérification à %s : %s", email, e, exc_info=True)
+                    logger.warning(
+                        "Lien d'activation de secours pour %s : %s/verifier-email?token=%s",
+                        email, settings.FRONTEND_URL, token,
+                    )
         return Response({'message': "Si un compte non vérifié existe pour cet email, un nouveau lien de confirmation vient d'être envoyé."})
 
 
