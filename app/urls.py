@@ -37,6 +37,8 @@ urlpatterns = [
     path('occupants/<int:occupant_id>/',         views.OccupantDetailView.as_view(),      name='occupant-detail'),
     path('occupants/<int:occupant_id>/liberer/', views.OccupantLibererView.as_view(),     name='occupant-liberer'),
     path('occupants/<int:occupant_id>/contrat/', views.OccupantContratPDFView.as_view(),  name='occupant-contrat'),
+    path('occupants/<int:occupant_id>/caution/recu/',    views.OccupantCautionRecuPDFView.as_view(),     name='occupant-caution-recu'),
+    path('occupants/<int:occupant_id>/caution/envoyer/', views.OccupantCautionRecuEnvoyerView.as_view(), name='occupant-caution-envoyer'),
 
     # Paiements
     path('paiements/',                        views.PaiementListCreateView.as_view(), name='paiement-list-create'),

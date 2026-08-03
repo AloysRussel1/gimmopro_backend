@@ -232,6 +232,39 @@ def envoyer_email_reset_password(user, token):
     )
 
 
+def envoyer_email_caution_recu(occupant, pdf_buffer):
+    """Envoi manuel (jamais automatique) du reçu de caution, en pièce jointe
+    PDF. Premier envoi du projet à joindre un fichier -- send_mail() seul ne
+    le permet pas, d'où EmailMultiAlternatives + .attach() ici plutôt que le
+    helper send_mail() utilisé par les autres emails du projet. Laisse
+    l'exception remonter à l'appelant : contrairement à l'inscription, cet
+    envoi est déclenché et observé directement par l'utilisateur, qui doit
+    voir l'échec plutôt qu'un succès silencieux mais faux."""
+    from django.conf import settings
+    from django.core.mail import EmailMultiAlternatives
+    from django.template.loader import render_to_string
+
+    comp = occupant.compartiment
+    immeuble = comp.logement.nom if comp else (occupant.logement.nom if occupant.logement else '—')
+    montant_txt = f"{int(occupant.caution_versee):,} FCFA".replace(',', ' ')
+
+    html_message = render_to_string('app/caution_recu_email.html', {
+        'occupant_nom':     occupant.nom_complet,
+        'immeuble':         immeuble,
+        'compartiment_nom': comp.nom if comp else '',
+        'montant_txt':      montant_txt,
+    })
+    email = EmailMultiAlternatives(
+        subject="Reçu de votre dépôt de garantie — Gimmopro",
+        body=f"Bonjour {occupant.nom_complet},\n\nVeuillez trouver ci-joint le reçu de votre dépôt de garantie de {montant_txt}.",
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[occupant.email],
+    )
+    email.attach_alternative(html_message, "text/html")
+    email.attach(f"recu_caution_{occupant.id:04d}.pdf", pdf_buffer.getvalue(), 'application/pdf')
+    email.send(fail_silently=False)
+
+
 def envoyer_email_verification(user, token):
     from django.conf import settings
     from django.core.mail import send_mail

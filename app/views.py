@@ -46,6 +46,7 @@ from .utils import (
     get_depense_or_404, get_document_or_404, get_etat_des_lieux_or_404,
     make_password_reset_token, verify_password_reset_token, envoyer_email_reset_password,
     make_email_verify_token, verify_email_verify_token, envoyer_email_verification,
+    envoyer_email_caution_recu,
     _generer_username_depuis_email, log_activity,
 )
 
@@ -887,6 +888,126 @@ def _build_recu_pdf(paiement):
     return buffer
 
 
+def _build_recu_caution_pdf(occupant):
+    """Construit le PDF du reçu de dépôt de garantie (caution) et retourne un
+    buffer BytesIO prêt à être servi. Même charte graphique que _build_recu_pdf
+    (reçu de loyer) pour une cohérence visuelle entre les deux documents.
+    L'appelant doit avoir déjà vérifié caution_versee > 0 et
+    date_versement_caution non nul avant d'appeler cette fonction."""
+    rl = get_reportlab()
+    if not rl:
+        return None
+    A4, getSampleStyleSheet, ParagraphStyle, cm, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, colors = rl
+
+    comp     = occupant.compartiment
+    immeuble = comp.logement.nom if comp else (occupant.logement.nom if occupant.logement else '—')
+    bailleur = occupant.proprietaire
+    bailleur_nom = (bailleur.get_full_name() or bailleur.username) if bailleur else 'Gimmopro'
+    bailleur_email = bailleur.email if bailleur else ''
+
+    buffer = io.BytesIO()
+    doc    = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2.5*cm, rightMargin=2.5*cm)
+    styles = getSampleStyleSheet()
+    story  = []
+
+    title_style  = ParagraphStyle('title',  parent=styles['Title'],   fontSize=20, spaceAfter=6,  alignment=1)
+    center_style = ParagraphStyle('center', parent=styles['Normal'],  fontSize=11, spaceAfter=4,  alignment=1)
+    h2_style     = ParagraphStyle('h2',     parent=styles['Heading2'],fontSize=13, spaceAfter=6)
+    body_style   = ParagraphStyle('body',   parent=styles['Normal'],  fontSize=11, leading=16, spaceAfter=4)
+    cell_style   = ParagraphStyle('cell', parent=styles['Normal'], fontSize=10, leading=14, textColor=colors.white)
+
+    story.append(Paragraph("REÇU DE DÉPÔT DE GARANTIE (CAUTION)", title_style))
+    story.append(Paragraph(f"Locataire : {occupant.nom_complet}", center_style))
+    story.append(Spacer(1, 0.4*cm))
+
+    montant_lettres = montant_en_lettres_fcfa(int(occupant.caution_versee))
+    montant_style = ParagraphStyle('m', parent=cell_style, fontSize=26, leading=32, alignment=1, fontName='Helvetica-Bold')
+    payé_style    = ParagraphStyle('s', parent=cell_style, fontSize=13, leading=17, alignment=1, fontName='Helvetica-Bold', textColor=colors.HexColor('#16A34A'), backColor=colors.white)
+    montant_data = [[
+        Paragraph(f"{int(occupant.caution_versee):,} FCFA".replace(',', ' '), montant_style),
+        Paragraph("✓ VERSÉ", payé_style),
+    ]]
+    montant_table = Table(montant_data, colWidths=[12*cm, 4*cm], rowHeights=[1.6*cm])
+    montant_table.setStyle(TableStyle([
+        ('BACKGROUND',  (0,0), (0,-1), colors.HexColor('#4F46E5')),
+        ('BACKGROUND',  (1,0), (1,-1), colors.HexColor('#4F46E5')),
+        ('VALIGN',      (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN',       (0,0), (-1,-1), 'CENTER'),
+        ('PADDING',     (0,0), (-1,-1), 10),
+    ]))
+    story.append(montant_table)
+    story.append(Paragraph(f"<i>({montant_lettres})</i>", ParagraphStyle('lettres', parent=body_style, fontSize=9, alignment=1, textColor=colors.grey, spaceBefore=4)))
+    story.append(Spacer(1, 0.5*cm))
+
+    parties_data = [
+        ['BAILLEUR', 'LOCATAIRE'],
+        [
+            Paragraph(f"{bailleur_nom}" + (f"<br/>{bailleur_email}" if bailleur_email else ''), cell_style),
+            Paragraph(f"{occupant.nom_complet}<br/>{occupant.telephone}" + (f"<br/>{comp.nom}" if comp else ''), cell_style),
+        ],
+    ]
+    parties_table = Table(parties_data, colWidths=[8*cm, 8*cm])
+    parties_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#0F172A')),
+        ('TEXTCOLOR',  (0,0), (-1,0), colors.HexColor('#F8FAFC')),
+        ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE',   (0,0), (-1,0), 10),
+        ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#334155')),
+        ('VALIGN',     (0,0), (-1,-1), 'TOP'),
+        ('PADDING',    (0,0), (-1,-1), 10),
+        ('GRID',       (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
+    ]))
+    story.append(parties_table)
+    story.append(Spacer(1, 0.5*cm))
+
+    story.append(Paragraph("DÉTAILS DU DÉPÔT DE GARANTIE", h2_style))
+    details = [
+        ['Description', 'Valeur'],
+        ['Logement',            immeuble],
+        ['Compartiment',        comp.nom if comp else '—'],
+        ['Date de versement',   occupant.date_versement_caution.strftime('%d/%m/%Y')],
+        ['Montant versé',       f"{int(occupant.caution_versee):,} FCFA".replace(',', ' ')],
+    ]
+    t = Table(details, colWidths=[8*cm, 8*cm])
+    t.setStyle(TableStyle([
+        ('BACKGROUND',    (0,0), (-1,0),  colors.HexColor('#0F172A')),
+        ('TEXTCOLOR',     (0,0), (-1,0),  colors.HexColor('#F8FAFC')),
+        ('FONTNAME',      (0,0), (-1,0),  'Helvetica-Bold'),
+        ('FONTSIZE',      (0,0), (-1,-1), 10),
+        ('ALIGN',         (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+        ('PADDING',       (0,0), (-1,-1), 8),
+        ('GRID',          (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
+        ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#F8FAFC')]),
+        ('FONTNAME',      (0,1), (0,-1),  'Helvetica-Bold'),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.5*cm))
+    story.append(Paragraph(
+        "Ce dépôt sera restitué au locataire à son départ, dans un délai raisonnable après "
+        "l'état des lieux de sortie, déduction faite des réparations locatives éventuellement "
+        "nécessaires.", body_style
+    ))
+    story.append(Spacer(1, 1.5*cm))
+
+    story.append(Paragraph("Signature et cachet du gestionnaire", h2_style))
+    sig_table = Table(
+        [[''], ['_________________']],
+        colWidths=[8*cm], rowHeights=[1.4*cm, 0.6*cm],
+    )
+    sig_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'BOTTOM'),
+    ]))
+    story.append(sig_table)
+    story.append(Spacer(1, 0.3*cm))
+    story.append(Paragraph(f"Émis le {date.today().strftime('%d/%m/%Y')} — document généré électroniquement par Gimmopro", center_style))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
 def _build_recu_og_image(paiement):
     """Image de prévisualisation (Open Graph) pour le lien de reçu partagé par
     WhatsApp/SMS — sans ça, le lien s'affiche comme du texte brut dans la
@@ -1011,6 +1132,66 @@ class RecuPublicImageView(APIView):
         response = HttpResponse(buffer, content_type='image/png')
         response['Cache-Control'] = 'public, max-age=86400'
         return response
+
+
+# ── REÇU DE CAUTION (DÉPÔT DE GARANTIE) ───────────
+
+def _caution_recu_erreur(occupant):
+    """Renvoie le message d'erreur si un reçu ne peut pas être généré pour cet
+    occupant, ou None si tout est en ordre. Émettre un reçu pour une caution
+    jamais réellement enregistrée comme versée serait trompeur pour un vrai
+    locataire — d'où ce garde-fou avant toute génération de PDF ou envoi."""
+    if not occupant.caution_versee or occupant.caution_versee <= 0:
+        return "Aucun montant de caution enregistré pour ce locataire."
+    if not occupant.date_versement_caution:
+        return "La date de versement de la caution n'est pas renseignée."
+    return None
+
+
+@method_decorator(xframe_options_exempt, name='get')
+class OccupantCautionRecuPDFView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, occupant_id):
+        occupant = get_occupant_or_404(request.user, occupant_id)
+        erreur = _caution_recu_erreur(occupant)
+        if erreur:
+            return Response({'error': erreur}, status=400)
+        buffer = _build_recu_caution_pdf(occupant)
+        if buffer is None:
+            return Response({'error': 'reportlab non installé.'}, status=500)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="recu_caution_{occupant.id:04d}.pdf"'
+        return response
+
+
+class OccupantCautionRecuEnvoyerView(APIView):
+    """Envoi manuel du reçu de caution par email — jamais automatique (voir
+    envoyer_email_caution_recu). Contrairement à l'inscription, c'est une
+    action déclenchée et observée directement par l'utilisateur : un échec
+    d'envoi doit remonter clairement au frontend plutôt qu'être seulement
+    loggé en silence."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, occupant_id):
+        occupant = get_occupant_or_404(request.user, occupant_id)
+        erreur = _caution_recu_erreur(occupant)
+        if erreur:
+            return Response({'error': erreur}, status=400)
+        if not occupant.email:
+            return Response({'error': "Aucune adresse email enregistrée pour ce locataire."}, status=400)
+
+        buffer = _build_recu_caution_pdf(occupant)
+        if buffer is None:
+            return Response({'error': 'reportlab non installé.'}, status=500)
+
+        try:
+            envoyer_email_caution_recu(occupant, buffer)
+        except Exception as e:
+            logger.error("Échec de l'envoi du reçu de caution à %s : %s", occupant.email, e, exc_info=True)
+            return Response({'error': "L'envoi de l'email a échoué. Réessayez dans quelques instants."}, status=502)
+
+        return Response({'message': f"Reçu envoyé à {occupant.email}."})
 
 
 # ── RAPPORT MENSUEL PDF ───────────────────────────

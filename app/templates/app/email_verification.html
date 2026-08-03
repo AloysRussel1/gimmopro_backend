@@ -39,26 +39,34 @@
 </style>
 </head>
 <body>
-  <div class="card">
-    <div class="logo">G</div>
-    <h1>Bienvenue sur Gimmopro !</h1>
-    <p>
-      Un compte vient d'être créé avec cette adresse email. Pour l'activer
-      et commencer à gérer vos biens immobiliers, confirmez votre adresse
-      en cliquant sur le bouton ci-dessous.
-    </p>
+<!-- Table de secours pour Outlook desktop : centrage fiable même si le CSS
+     ci-dessus (variables incluses) est partiellement ignoré. -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+  <tr>
+    <td align="center">
+      <div class="card" style="width:100%;max-width:460px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:20px;padding:36px 28px;text-align:center;">
+        <div class="logo" style="display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:12px;background:#4F46E5;color:#ffffff;font-size:20px;font-weight:700;margin-bottom:18px;">G</div>
+        <h1 style="font-size:19px;font-weight:700;color:#0F172A;margin:0 0 10px;">Bienvenue sur Gimmopro !</h1>
+        <p style="font-size:14px;color:#64748B;line-height:1.6;margin:0 0 22px;">
+          Un compte vient d'être créé avec cette adresse email. Pour l'activer
+          et commencer à gérer vos biens immobiliers, confirmez votre adresse
+          en cliquant sur le bouton ci-dessous.
+        </p>
 
-    <a class="btn" href="{{ lien }}">Confirmer mon adresse email</a>
+        <a class="btn" href="{{ lien }}" style="display:block;width:100%;background:#4F46E5;color:#ffffff !important;text-decoration:none;font-size:15px;font-weight:700;padding:14px;border-radius:10px;margin-bottom:20px;">Confirmer mon adresse email</a>
 
-    <p class="fallback">
-      Le bouton ne fonctionne pas ? Copiez-collez ce lien dans votre navigateur :<br>
-      {{ lien }}
-    </p>
+        <p class="fallback" style="font-size:11.5px;color:#94A3B8;word-break:break-all;margin:0 0 22px;">
+          Le bouton ne fonctionne pas ? Copiez-collez ce lien dans votre navigateur :<br>
+          {{ lien }}
+        </p>
 
-    <p class="footer">
-      Ce lien est valable 7 jours. Si vous n'êtes pas à l'origine de cette
-      inscription, ignorez simplement cet email — aucun compte ne sera activé.
-    </p>
-  </div>
+        <p class="footer" style="font-size:11.5px;color:#94A3B8;margin:0;border-top:1px solid #E2E8F0;padding-top:18px;">
+          Ce lien est valable 7 jours. Si vous n'êtes pas à l'origine de cette
+          inscription, ignorez simplement cet email — aucun compte ne sera activé.
+        </p>
+      </div>
+    </td>
+  </tr>
+</table>
 </body>
 </html>

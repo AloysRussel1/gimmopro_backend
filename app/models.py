@@ -135,6 +135,10 @@ class Occupant(models.Model):
     date_fin_contrat       = models.DateField(null=True, blank=True)
     loyer                  = models.DecimalField(max_digits=10, decimal_places=2)
     caution_versee         = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Optionnel : beaucoup d'occupants existants ont une caution_versee saisie
+    # sans date connue (import initial, saisie rétroactive) — un reçu de
+    # caution ne doit être proposé que si cette date est réellement connue.
+    date_versement_caution = models.DateField(null=True, blank=True)
     date_prochain_paiement = models.DateField()
     statut                 = models.CharField(
         max_length=20,

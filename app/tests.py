@@ -1,5 +1,6 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth.models import User
+from django.core import mail
 from django.urls import reverse
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
@@ -445,3 +446,76 @@ class DashboardStatsTest(AuthenticatedAPITest):
         self.assertIn("paiements", res.data)
         self.assertEqual(res.data["compartiments"]["occupes"], 1)
         self.assertGreater(res.data["paiements"]["total_revenus"], 0)
+
+
+# ─────────────────────────────────────────
+# REÇU DE CAUTION TESTS
+# ─────────────────────────────────────────
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+class CautionRecuAPITest(AuthenticatedAPITest):
+    def setUp(self):
+        super().setUp()
+        self.logement = create_logement(self.user)
+        self.occupant = create_occupant(self.logement)
+        self.occupant.caution_versee = Decimal("300.00")
+        self.occupant.date_versement_caution = date.today()
+        self.occupant.save()
+
+    def test_pdf_recu_caution(self):
+        res = self.client.get(reverse("occupant-caution-recu", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+
+    def test_pdf_recu_caution_refuse_si_montant_nul(self):
+        self.occupant.caution_versee = Decimal("0.00")
+        self.occupant.save()
+        res = self.client.get(reverse("occupant-caution-recu", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pdf_recu_caution_refuse_si_date_absente(self):
+        self.occupant.date_versement_caution = None
+        self.occupant.save()
+        res = self.client.get(reverse("occupant-caution-recu", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_envoi_recu_caution_succes(self):
+        res = self.client.post(reverse("occupant-caution-envoyer", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.to, [self.occupant.email])
+        self.assertEqual(len(sent.attachments), 1)
+        filename, content, mimetype = sent.attachments[0]
+        self.assertEqual(mimetype, "application/pdf")
+        self.assertTrue(content.startswith(b"%PDF"))
+
+    def test_envoi_recu_caution_refuse_si_montant_nul(self):
+        self.occupant.caution_versee = Decimal("0.00")
+        self.occupant.save()
+        res = self.client.post(reverse("occupant-caution-envoyer", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_envoi_recu_caution_refuse_si_email_absent(self):
+        self.occupant.email = ""
+        self.occupant.save()
+        res = self.client.post(reverse("occupant-caution-envoyer", args=[self.occupant.id]))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_isolation_multi_tenant(self):
+        """Un occupant d'un autre propriétaire ne doit jamais être accessible."""
+        autre = create_user("autre_bailleur_caution")
+        autre_logement = create_logement(autre, "Logement d'autrui")
+        autre_occupant = create_occupant(autre_logement)
+        autre_occupant.caution_versee = Decimal("300.00")
+        autre_occupant.date_versement_caution = date.today()
+        autre_occupant.save()
+
+        res_pdf = self.client.get(reverse("occupant-caution-recu", args=[autre_occupant.id]))
+        self.assertEqual(res_pdf.status_code, status.HTTP_404_NOT_FOUND)
+
+        res_envoi = self.client.post(reverse("occupant-caution-envoyer", args=[autre_occupant.id]))
+        self.assertEqual(res_envoi.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(len(mail.outbox), 0)

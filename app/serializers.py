@@ -123,6 +123,7 @@ class OccupantSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'nom_complet', 'email', 'telephone', 'cni',
             'numero_contrat', 'date_debut_contrat', 'date_fin_contrat', 'loyer', 'caution_versee',
+            'date_versement_caution',
             'date_prochain_paiement', 'statut', 'actif',
             'compartiment', 'compartiment_nom',
             'logement', 'logement_nom', 'logement_loc',
