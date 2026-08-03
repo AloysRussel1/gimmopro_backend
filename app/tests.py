@@ -7,7 +7,7 @@ from rest_framework import status
 from datetime import date, timedelta
 from decimal import Decimal
 
-from .models import Logement, Compartiment, Occupant, Paiement
+from .models import Logement, Compartiment, Occupant, Paiement, Depense
 
 
 # ─────────────────────────────────────────
@@ -550,3 +550,78 @@ class CautionRecuAPITest(AuthenticatedAPITest):
         res_envoi = self.client.post(reverse("occupant-caution-envoyer", args=[autre_occupant.id]))
         self.assertEqual(res_envoi.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(len(mail.outbox), 0)
+
+
+# ─────────────────────────────────────────
+# EXPORTS COMPTABLES (Excel / CSV) TESTS
+# ─────────────────────────────────────────
+
+class ExportAPITest(AuthenticatedAPITest):
+    """NB: le paramètre de requête est 'export_format', jamais 'format' --
+    'format' est réservé par DRF (URL_FORMAT_OVERRIDE, utilisé pour la
+    négociation de contenu) : passer ?format=xlsx dans les tests ferait
+    échouer la requête avec un faux 404 avant même d'atteindre la vue,
+    exactement le bug repéré et corrigé pour ces endpoints."""
+
+    def setUp(self):
+        super().setUp()
+        self.logement = create_logement(self.user)
+        self.occupant = create_occupant(self.logement)
+        create_paiement(self.occupant, montant=Decimal("25000.50"))
+        Depense.objects.create(logement=self.logement, libelle="Réparation", montant=Decimal("5000.00"), date=date.today())
+
+    def test_export_paiements_xlsx(self):
+        res = self.client.get(reverse("export-paiements") + "?export_format=xlsx")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertTrue(res.content.startswith(b"PK"))  # xlsx = zip
+
+    def test_export_paiements_csv(self):
+        res = self.client.get(reverse("export-paiements") + "?export_format=csv")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("text/csv", res["Content-Type"])
+        body = res.content.decode("utf-8-sig")
+        self.assertIn("Locataire", body)  # en-tête
+        self.assertIn(self.occupant.nom_complet, body)
+
+    def test_export_depenses_csv(self):
+        res = self.client.get(reverse("export-depenses") + "?export_format=csv")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        body = res.content.decode("utf-8-sig")
+        self.assertIn("Réparation", body)
+
+    def test_export_recapitulatif_annuel_csv(self):
+        annee = date.today().year
+        res = self.client.get(reverse("export-recapitulatif-annuel") + f"?export_format=csv&annee={annee}")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        body = res.content.decode("utf-8-sig")
+        self.assertIn("TOTAL ANNÉE", body)
+
+    def test_export_paiements_filtre_annee_exclut_hors_periode(self):
+        res = self.client.get(reverse("export-paiements") + "?export_format=csv&annee=2019")
+        body = res.content.decode("utf-8-sig")
+        self.assertNotIn(self.occupant.nom_complet, body)
+
+    def test_export_defaut_xlsx_sans_parametre(self):
+        """Sans export_format explicite, retombe sur xlsx."""
+        res = self.client.get(reverse("export-paiements"))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.content.startswith(b"PK"))
+
+    def test_export_isolation_multi_tenant(self):
+        """Le filtre logement d'un autre propriétaire doit être refusé (404),
+        jamais silencieusement ignoré ni exposer ses données."""
+        autre = create_user("autre_bailleur_export")
+        autre_logement = create_logement(autre, "Logement d'autrui export")
+        res = self.client.get(reverse("export-paiements") + f"?logement={autre_logement.id}")
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_export_paiements_ne_contient_pas_donnees_autre_proprietaire(self):
+        autre = create_user("autre_bailleur_export2")
+        autre_logement = create_logement(autre, "Logement autrui 2")
+        autre_occupant = create_occupant(autre_logement, suffix="autrui")
+        create_paiement(autre_occupant)
+
+        res = self.client.get(reverse("export-paiements") + "?export_format=csv")
+        body = res.content.decode("utf-8-sig")
+        self.assertNotIn(autre_occupant.nom_complet, body)

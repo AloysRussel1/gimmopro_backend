@@ -22,6 +22,11 @@ urlpatterns = [
     # Rapport mensuel PDF
     path('rapports/mensuel/', views.RapportMensuelPDFView.as_view(), name='rapport-mensuel'),
 
+    # Exports comptables (Excel/CSV)
+    path('export/paiements/',             views.ExportPaiementsView.as_view(),            name='export-paiements'),
+    path('export/depenses/',              views.ExportDepensesView.as_view(),             name='export-depenses'),
+    path('export/recapitulatif-annuel/',  views.ExportRecapitulatifAnnuelView.as_view(),  name='export-recapitulatif-annuel'),
+
     # Logements
     path('logements/',                   views.LogementListCreateView.as_view(), name='logement-list-create'),
     path('logements/<int:logement_id>/', views.LogementDetailView.as_view(),     name='logement-detail'),

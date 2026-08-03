@@ -1,5 +1,6 @@
 import re
 import os
+import csv
 import logging
 
 from django.conf import settings
@@ -16,6 +17,7 @@ from django.db.models import Sum, Count
 from django.db.models.functions import TruncMonth
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta
+from decimal import Decimal
 import io
 import calendar
 
@@ -1367,6 +1369,155 @@ class RapportMensuelPDFView(APIView):
         response = HttpResponse(buffer, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="rapport_{nom_mois}_{annee}.pdf"'
         return response
+
+
+# ── EXPORTS COMPTABLES (Excel / CSV) ──────────────
+
+def _reponse_export(headers, rows, nom_fichier, fmt):
+    """Construit la réponse HTTP d'export -- CSV (point-virgule, séparateur
+    attendu par Excel en locale française ; BOM utf-8-sig pour que les
+    caractères accentués s'affichent correctement à l'ouverture, plutôt que
+    des caractères corrompus) ou XLSX (openpyxl). `rows` : liste de listes
+    de valeurs déjà prêtes à écrire telles quelles (str/int/float/date) --
+    jamais de Decimal brut, openpyxl ne le convertit pas de façon fiable
+    en cellule numérique."""
+    if fmt == 'csv':
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = f'attachment; filename="{nom_fichier}.csv"'
+        writer = csv.writer(response, delimiter=';')
+        writer.writerow(headers)
+        writer.writerows(rows)
+        return response
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        ws.append(row)
+    for col in ws.columns:
+        largeur = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(largeur + 2, 40)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    response = HttpResponse(
+        buffer, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = f'attachment; filename="{nom_fichier}.xlsx"'
+    return response
+
+
+class ExportPaiementsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        fmt = request.query_params.get('export_format', 'xlsx')
+        qs = Paiement.objects.filter(occupant__proprietaire=request.user).select_related(
+            'occupant', 'occupant__compartiment', 'occupant__logement', 'occupant__compartiment__logement'
+        )
+        annee    = request.query_params.get('annee')
+        mois     = request.query_params.get('mois')
+        logement = request.query_params.get('logement')
+        if annee:
+            qs = qs.filter(date_paiement__year=int(annee))
+        if mois:
+            qs = qs.filter(date_paiement__month=int(mois))
+        if logement:
+            get_logement_or_404(request.user, logement)  # 404 si ce logement n'appartient pas à l'utilisateur
+            qs = qs.filter(occupant__logement_id=logement)
+        qs = qs.order_by('date_paiement')
+
+        headers = [
+            'Date paiement', 'Locataire', 'Logement', 'Compartiment',
+            'Mode de paiement', 'Nombre de mois', 'Début période', 'Fin période',
+            'Montant versé (FCFA)', 'Statut', 'Note',
+        ]
+        rows = []
+        for p in qs:
+            comp = p.occupant.compartiment
+            logement_nom = comp.logement.nom if comp else (p.occupant.logement.nom if p.occupant.logement else '—')
+            rows.append([
+                p.date_paiement.strftime('%d/%m/%Y'),
+                p.occupant.nom_complet,
+                logement_nom,
+                comp.nom if comp else '—',
+                p.get_mode_paiement_display(),
+                p.nombre_mois,
+                p.date_debut_periode.strftime('%d/%m/%Y'),
+                p.date_fin_periode.strftime('%d/%m/%Y'),
+                float(p.montant_verse),
+                p.statut,
+                p.note,
+            ])
+
+        suffixe = f"_{annee}" if annee else ''
+        return _reponse_export(headers, rows, f"paiements{suffixe}", fmt)
+
+
+class ExportDepensesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        fmt = request.query_params.get('export_format', 'xlsx')
+        qs = Depense.objects.filter(logement__proprietaire=request.user).select_related('logement')
+        annee    = request.query_params.get('annee')
+        mois     = request.query_params.get('mois')
+        logement = request.query_params.get('logement')
+        if annee:
+            qs = qs.filter(date__year=int(annee))
+        if mois:
+            qs = qs.filter(date__month=int(mois))
+        if logement:
+            get_logement_or_404(request.user, logement)
+            qs = qs.filter(logement_id=logement)
+        qs = qs.order_by('date')
+
+        headers = ['Date', 'Logement', 'Libellé', 'Catégorie', 'Montant (FCFA)', 'Note']
+        rows = [
+            [
+                d.date.strftime('%d/%m/%Y'), d.logement.nom, d.libelle,
+                d.get_categorie_display(), float(d.montant), d.note,
+            ]
+            for d in qs
+        ]
+
+        suffixe = f"_{annee}" if annee else ''
+        return _reponse_export(headers, rows, f"depenses{suffixe}", fmt)
+
+
+class ExportRecapitulatifAnnuelView(APIView):
+    """Un total par mois (loyers encaissés, dépenses, revenu net) sur toute
+    l'année -- vue d'ensemble comptable/fiscale, distincte du rapport
+    mensuel PDF qui détaille un seul mois à la fois."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        fmt   = request.query_params.get('export_format', 'xlsx')
+        annee = int(request.query_params.get('annee', date.today().year))
+        mes_logements = Logement.objects.filter(proprietaire=request.user)
+
+        headers = ['Mois', 'Loyers encaissés (FCFA)', 'Dépenses (FCFA)', 'Revenu net (FCFA)']
+        rows = []
+        total_encaisse = Decimal('0')
+        total_depenses = Decimal('0')
+        for m in range(1, 13):
+            encaisse = Paiement.objects.filter(
+                occupant__logement__in=mes_logements, date_paiement__year=annee, date_paiement__month=m
+            ).aggregate(t=Sum('montant_verse'))['t'] or Decimal('0')
+            depenses = Depense.objects.filter(
+                logement__in=mes_logements, date__year=annee, date__month=m
+            ).aggregate(t=Sum('montant'))['t'] or Decimal('0')
+            rows.append([NOM_MOIS[m], float(encaisse), float(depenses), float(encaisse - depenses)])
+            total_encaisse += encaisse
+            total_depenses += depenses
+
+        rows.append(['TOTAL ANNÉE', float(total_encaisse), float(total_depenses), float(total_encaisse - total_depenses)])
+        return _reponse_export(headers, rows, f"recapitulatif_annuel_{annee}", fmt)
 
 
 # ── PAIEMENTS ─────────────────────────────────────
