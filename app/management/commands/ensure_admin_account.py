@@ -34,6 +34,18 @@ class Command(BaseCommand):
             self.stdout.write("SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD non définies -- aucun compte de secours géré.")
             return
 
+        # Diagnostic sur la FORME du mot de passe lu depuis l'environnement --
+        # jamais sa valeur -- pour repérer un copier-coller Railway avec des
+        # guillemets ou espaces parasites sans jamais faire fuiter le secret.
+        quote_chars = ('"', "'")
+        a_des_espaces_parasites = password != password.strip()
+        entoure_de_guillemets = bool(password) and password[0] in quote_chars and password[-1] in quote_chars
+        self.stdout.write(
+            f"SUPERADMIN_PASSWORD lue : longueur={len(password)}, "
+            f"espace/tab en début ou fin={a_des_espaces_parasites}, "
+            f"entourée de guillemets={entoure_de_guillemets}"
+        )
+
         user = User.objects.filter(email__iexact=email).first()
 
         if user is None:
@@ -50,6 +62,14 @@ class Command(BaseCommand):
         user.is_staff = True
         user.is_superuser = True
         user.save()
+
+        # Confirmation post-écriture, relue depuis l'objet tel qu'il vient
+        # d'être sauvegardé -- aucune valeur secrète.
+        self.stdout.write(
+            f"Compte Super Admin en BDD : id={user.pk}, username={user.username!r}, "
+            f"email={user.email!r}, is_active={user.is_active}, is_staff={user.is_staff}, "
+            f"is_superuser={user.is_superuser}"
+        )
 
         profile, created_profile = Profile.objects.get_or_create(user=user, defaults={'is_verified': True})
         if not created_profile and not profile.is_verified:
