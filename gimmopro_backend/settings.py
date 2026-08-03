@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 import dj_database_url
@@ -149,6 +150,32 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME':   timedelta(days=7),
     'ROTATE_REFRESH_TOKENS':    True,
     'BLACKLIST_AFTER_ROTATION': True,
+}
+
+# Sans ce réglage, les logger.warning()/info() de l'app (aucun handler
+# explicite configuré nulle part) retombent sur logging.lastResort, qui
+# écrit sur STDERR -- alors que les print() de diagnostic ci-dessus (ex:
+# [DATABASE CONFIG]) vont sur STDOUT et sont, eux, toujours visibles dans
+# les logs Railway. C'est cohérent avec ce qu'on observe en production :
+# les print() apparaissent toujours, les logger.warning() de authenticate()/
+# post() jamais, quelle que soit la requête. On force donc explicitement
+# les loggers de l'app sur STDOUT, le même flux déjà prouvé fiable.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'app_stdout': {
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,
+        },
+    },
+    'loggers': {
+        'app': {
+            'handlers': ['app_stdout'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
 }
 
 # ── Email (reset mot de passe, vérification d'email) ──────────────
